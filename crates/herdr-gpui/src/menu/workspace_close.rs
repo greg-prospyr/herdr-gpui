@@ -1,5 +1,6 @@
-//! A fresh, cancellable preflight owned by one close dialog. Unknown status
-//! requires the same explicit consent as work that has not been published.
+//! A fresh, cancellable preflight owned by one close dialog. It informs and
+//! never gates: closing ends terminals, and the checkout keeps its files,
+//! commits, and branch, so the dialog closes at once whatever it finds.
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -21,36 +22,23 @@ struct Checkout {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
 
     #[test]
-    fn pending_and_risky_reports_cannot_close_without_consent() {
-        let snapshot = crate::sidebar::layout_tests::snapshot(7);
-        let target = WorkspaceTarget::new(&snapshot, &snapshot.workspaces[3]);
-        let mut check = CloseCheck::fixture(&snapshot, &target, None);
-        assert!(!check.ready("close"));
-        for report in [
-            Report {
-                dirty: true,
-                ..Report::default()
-            },
-            Report {
-                unpushed: true,
-                ..Report::default()
-            },
-            Report {
-                unknown: true,
-                ..Report::default()
-            },
-        ] {
-            check.report = Some(report);
-            for text in ["", "Close", "yes", "clos"] {
-                assert!(!check.ready(text));
-            }
-            assert!(check.ready("close"));
-        }
-        check.report = Some(Report::default());
-        assert!(check.ready(""));
+    fn reports_only_mention_work_that_stays_on_disk() {
+        let report = |dirty, unpushed| Report { dirty, unpushed };
+        assert_eq!(report(false, false).note(), None);
+        assert_eq!(
+            report(true, false).note(),
+            Some("Uncommitted files stay on disk.")
+        );
+        assert_eq!(
+            report(false, true).note(),
+            Some("Unpushed commits stay on disk.")
+        );
+        assert!(report(true, true).note().unwrap().contains("and"));
     }
 
     #[test]
@@ -64,13 +52,12 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_worker_requires_consent_and_drop_cancels() {
+    fn a_disconnected_worker_says_nothing_and_drop_cancels() {
         let snapshot = crate::sidebar::layout_tests::snapshot(7);
         let target = WorkspaceTarget::new(&snapshot, &snapshot.workspaces[3]);
         let mut check = CloseCheck::fixture(&snapshot, &target, None);
         assert!(check.poll());
-        assert!(!check.ready(""));
-        assert!(check.ready("close"));
+        assert_eq!(check.report.as_ref().and_then(Report::note), None);
         let cancelled = check.cancelled.clone();
         drop(check);
         assert!(cancelled.load(Ordering::Relaxed));
@@ -81,12 +68,18 @@ mod tests {
 pub(super) struct Report {
     pub dirty: bool,
     pub unpushed: bool,
-    pub unknown: bool,
 }
 
 impl Report {
-    pub fn needs_consent(&self) -> bool {
-        self.dirty || self.unpushed || self.unknown
+    /// What the dialog mentions, if anything: work that stays on disk. A
+    /// status that could not be read says nothing.
+    pub fn note(&self) -> Option<&'static str> {
+        match (self.dirty, self.unpushed) {
+            (true, true) => Some("Uncommitted files and unpushed commits stay on disk."),
+            (true, false) => Some("Uncommitted files stay on disk."),
+            (false, true) => Some("Unpushed commits stay on disk."),
+            (false, false) => None,
+        }
     }
 }
 
@@ -149,10 +142,7 @@ impl CloseCheck {
                 )
             })
             .collect();
-        let mut report = Report {
-            unknown: checkouts.len() > 128,
-            ..Report::default()
-        };
+        let mut report = Report::default();
         let (sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = cancelled.clone();
@@ -171,12 +161,9 @@ impl CloseCheck {
                             cancellation.load(Ordering::Relaxed)
                         })
                     });
-                    match status {
-                        Ok((dirty, unpushed)) => {
-                            report.dirty |= dirty;
-                            report.unpushed |= unpushed;
-                        }
-                        Err(_) => report.unknown = true,
+                    if let Ok((dirty, unpushed)) = status {
+                        report.dirty |= dirty;
+                        report.unpushed |= unpushed;
                     }
                 }
                 let _ = sender.send(report);
@@ -197,23 +184,12 @@ impl CloseCheck {
         match self.receiver.try_recv() {
             Ok(report) => self.report = Some(report),
             Err(mpsc::TryRecvError::Empty) => return false,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.report = Some(Report {
-                    unknown: true,
-                    ..Report::default()
-                })
-            }
+            Err(mpsc::TryRecvError::Disconnected) => self.report = Some(Report::default()),
         }
         true
     }
 
     pub fn current(&self, snapshot: &ClientShellSnapshot, target: &WorkspaceTarget) -> bool {
         self.checkouts == checkouts(snapshot, target)
-    }
-
-    pub fn ready(&self, text: &str) -> bool {
-        self.report
-            .as_ref()
-            .is_some_and(|report| !report.needs_consent() || text == "close")
     }
 }

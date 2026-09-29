@@ -40,7 +40,6 @@ pub(crate) fn submit_focus_change(
             Some(super::workspace_close::Report {
                 dirty: true,
                 unpushed: true,
-                unknown: false,
             }),
         )
     });
@@ -49,7 +48,6 @@ pub(crate) fn submit_focus_change(
     view.menu.page = Some(super::Page::Dialog(action));
     if let Some(check) = close_check {
         view.menu.close_check = Some(check);
-        view.menu.input = Some(DialogInput::new("close".into()));
     }
     if action == WorkspaceAction::DeleteWorktree {
         view.menu.deletion = Some(Deletion {
@@ -97,58 +95,57 @@ pub(crate) fn submit_focus_change(
 }
 
 #[gpui::test]
-fn close_dialog_blocks_submission_until_risks_are_explicitly_accepted(
-    cx: &mut gpui::TestAppContext,
-) {
+fn close_submits_at_once_and_only_notes_work_left_on_disk(cx: &mut gpui::TestAppContext) {
     use super::workspace_close::{CloseCheck, Report};
     let (view, cx) = cx.add_window_view(sidebar::layout_tests::fixture_window);
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.live.status = crate::state::ConnectionStatus::Connected;
-            let snapshot = std::sync::Arc::make_mut(view.live.snapshot.as_mut().unwrap());
-            snapshot.workspaces = sidebar::layout_tests::snapshot(7).workspaces;
-            view.open_workspace_menu("w3", Default::default(), window, cx);
-            view.menu.page = Some(super::Page::Dialog(WorkspaceAction::Close));
-            // Missing or pending checks must block even a programmatic submission.
-            view.submit_workspace_dialog(window, cx);
-            assert!(view.menu.error.is_none());
-            let snapshot = view.live.snapshot.as_ref().unwrap();
-            let target = view.menu.target.as_ref().unwrap();
-            view.menu.close_check = Some(CloseCheck::fixture(snapshot, target, None));
-            view.submit_workspace_dialog(window, cx);
-            assert!(view.menu.error.is_none());
-            view.menu.close_check.as_mut().unwrap().report = Some(Report {
-                dirty: true,
-                unpushed: true,
-                unknown: true,
+    let submit = |cx: &mut gpui::VisualTestContext, report: Option<Report>| {
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.live.status = crate::state::ConnectionStatus::Connected;
+                let snapshot = std::sync::Arc::make_mut(view.live.snapshot.as_mut().unwrap());
+                snapshot.workspaces = sidebar::layout_tests::snapshot(7).workspaces;
+                view.open_workspace_menu("w3", Default::default(), window, cx);
+                view.menu.page = Some(super::Page::Dialog(WorkspaceAction::Close));
+                let snapshot = view.live.snapshot.as_ref().unwrap();
+                let target = view.menu.target.as_ref().unwrap();
+                view.menu.close_check = Some(CloseCheck::fixture(snapshot, target, report));
+                assert!(view.menu.input.is_none(), "nothing to type");
             });
-            view.menu.input = Some(DialogInput::new(String::new()));
-            view.submit_workspace_dialog(window, cx);
-            assert!(view.menu.error.is_none());
+            window.draw(cx).clear(cx);
         });
-        window.draw(cx).clear(cx);
-    });
+    };
+    // A dirty, unpushed checkout is mentioned, quietly, above the buttons.
+    submit(
+        cx,
+        Some(Report {
+            dirty: true,
+            unpushed: true,
+        }),
+    );
     let panel = cx.debug_bounds("menu-panel").unwrap();
-    let warning = cx.debug_bounds("close-git-status").unwrap();
-    let submit = cx.debug_bounds("dialog-submit").unwrap();
-    assert!(panel.contains(&warning.origin));
-    assert!(warning.bottom() <= submit.top());
-    assert!(submit.bottom() <= panel.bottom());
-    cx.simulate_keystrokes("enter");
-    view.read_with(cx, |view, _| {
-        assert!(view.menu.error.is_none());
-        assert!(view.menu.page.is_some());
-    });
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.menu.input = Some(DialogInput::new("close".into()));
-            view.submit_workspace_dialog(window, cx);
-            // Only after consent does submission reach the absent fixture connection.
-            assert!(view.menu.error.is_some());
-            view.dismiss_menu(window, cx);
-            assert!(view.menu.close_check.is_none());
-        })
-    });
+    let note = cx.debug_bounds("close-git-status").unwrap();
+    let button = cx.debug_bounds("dialog-submit").unwrap();
+    assert!(panel.contains(&note.origin));
+    assert!(note.bottom() <= button.top());
+    // Neither found work nor a check still running holds the close back: it
+    // goes straight to the connection, which the fixture lacks.
+    for report in [
+        Some(Report {
+            dirty: true,
+            unpushed: true,
+        }),
+        None,
+    ] {
+        submit(cx, report);
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.submit_workspace_dialog(window, cx);
+                assert!(view.menu.error.is_some(), "the close was attempted");
+                view.dismiss_menu(window, cx);
+                assert!(view.menu.close_check.is_none());
+            })
+        });
+    }
 }
 
 #[gpui::test]

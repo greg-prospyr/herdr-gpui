@@ -548,13 +548,6 @@ impl HerdrWindow {
         if let Some(check) = &mut self.menu.close_check
             && check.poll()
         {
-            if check
-                .report
-                .as_ref()
-                .is_some_and(|report| report.needs_consent())
-            {
-                self.menu.input = Some(DialogInput::new(String::new()));
-            }
             cx.notify();
         }
         if self.menu.worktree_open.is_some() && !self.worktree_open_current() {
@@ -752,20 +745,16 @@ impl HerdrWindow {
             {
                 params["label"] = name.into();
             }
-            if action == WorkspaceAction::Close {
-                let Some(check) = &self.menu.close_check else {
-                    return Ok(Submission::Awaiting {
-                        focus_changed: false,
-                    });
-                };
-                if !check.current(snapshot, target) {
-                    return Err(crate::Error::WorkspaceGroupChanged);
-                }
-                if !check.ready(text) {
-                    return Ok(Submission::Awaiting {
-                        focus_changed: false,
-                    });
-                }
+            // Closing ends terminals and never deletes files, so it waits for
+            // nothing; it only refuses a group that changed under the dialog.
+            if action == WorkspaceAction::Close
+                && self
+                    .menu
+                    .close_check
+                    .as_ref()
+                    .is_some_and(|check| !check.current(snapshot, target))
+            {
+                return Err(crate::Error::WorkspaceGroupChanged);
             }
             if action == WorkspaceAction::DeleteWorktree {
                 let deletion = self
@@ -879,15 +868,6 @@ impl HerdrWindow {
                         && !picker.filtered.is_empty()
                         && !picker.search.read(cx).is_composing()
                 }))
-            && (action != WorkspaceAction::Close
-                || self.menu.close_check.as_ref().is_some_and(|check| {
-                    check.ready(
-                        self.menu
-                            .input
-                            .as_ref()
-                            .map_or("", |input| input.text.as_str()),
-                    )
-                }))
             && !creating;
         let destructive = matches!(
             action,
@@ -974,21 +954,21 @@ impl HerdrWindow {
                     "The branch is not deleted. The Herdr workspace will close."
                 })),
         };
-        if action == WorkspaceAction::Close {
-            body = body.child(div().debug_selector(|| "close-git-status".into()).text_color(danger).child(
-                match self.menu.close_check.as_ref().and_then(|check| check.report.as_ref()) {
-                    None => "Checking for uncommitted files and unpushed commits...".to_owned(),
-                    Some(report) => {
-                        let mut warnings = Vec::new();
-                        if report.dirty { warnings.push("Uncommitted files are present."); }
-                        if report.unpushed { warnings.push("Unpushed commits are present."); }
-                        if report.unknown { warnings.push("Git status could not be verified for every checkout."); }
-                        if report.needs_consent() { warnings.push("Type close to consent to closing anyway, or Cancel to keep working."); }
-                        else { warnings.push("No uncommitted files or unpushed commits found (using local remote-tracking refs)."); }
-                        warnings.join(" ")
-                    }
-                }
-            ));
+        // A note, not a gate: the checkout keeps its files and commits.
+        if action == WorkspaceAction::Close
+            && let Some(note) = self
+                .menu
+                .close_check
+                .as_ref()
+                .and_then(|check| check.report.as_ref())
+                .and_then(super::workspace_close::Report::note)
+        {
+            body = body.child(
+                div()
+                    .debug_selector(|| "close-git-status".into())
+                    .text_color(rgb(theme.muted))
+                    .child(note),
+            );
         }
         if self.menu.input.is_some() && action != WorkspaceAction::NewWorktree {
             body = body.child(self.render_dialog_input(cx));

@@ -1130,14 +1130,13 @@ Windows setup) nothing is saved and the window says so.
   space of the selected connection opens the same menu, and moving the pointer
   anywhere but into that menu closes it again; the flag is off by default, so
   spaces normally open their menu only on right-click, and a menu opened by
-  right-click stays until it is dismissed. Close requires
-  confirmation and terminates terminals, not checkout files or branches. Before
-  enabling Close, the dialog checks every affected local checkout for uncommitted
-  files (including staged, untracked, and submodule changes) and commits absent
-  from all local remote-tracking refs. It does not fetch. If either is present,
-  type `close` to consent explicitly. Unverifiable status, including remote
-  endpoints and missing Git metadata, also requires this consent. Cancel keeps
-  the workspaces open. New
+  right-click stays until it is dismissed. Close terminates terminals, not
+  checkout files, commits, or branches, so its button acts at once. Meanwhile the
+  dialog checks every affected local checkout for uncommitted files (including
+  staged, untracked, and submodule changes) and commits absent from all local
+  remote-tracking refs, without fetching, and notes any it finds as staying on
+  disk; a status it cannot read is not mentioned. Cancel keeps the workspaces
+  open. New
   worktree proposes the branch name the daemon would generate, previews the
   checkout path derived from it, rejects invalid Git branch names before submission,
   reports failures in the active dialog tab rather than the connection status, and selects
