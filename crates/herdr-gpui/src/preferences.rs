@@ -571,12 +571,58 @@ impl AgentSort {
     }
 }
 
+/// How the Spaces list is ordered: manual keeps the daemon's order, which
+/// dragging changes for every client; attention floats the spaces that need
+/// you and lets the ones you leave alone drift down, in this client only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpaceSort {
+    #[default]
+    Manual,
+    Attention,
+}
+
+impl std::fmt::Display for SpaceSort {
+    /// Also the stored spelling, which `From<&str>` reads back.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Manual => "manual",
+            Self::Attention => "attention",
+        })
+    }
+}
+
+/// Like `AgentSort`, an unknown value falls back to the default.
+impl From<&str> for SpaceSort {
+    fn from(value: &str) -> Self {
+        match value {
+            "attention" => Self::Attention,
+            _ => Self::Manual,
+        }
+    }
+}
+
+impl SpaceSort {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Manual => Self::Attention,
+            Self::Attention => Self::Manual,
+        }
+    }
+
+    fn parse(value: Option<&serde_json::Value>) -> Self {
+        value
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(Self::default, Self::from)
+    }
+}
+
 /// The window chrome this endpoint remembers between runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Chrome {
     pub sidebar_width: Option<f32>,
     pub sidebar_split: Option<f32>,
     pub agent_sort: AgentSort,
+    pub space_sort: SpaceSort,
 }
 
 pub struct Preferences {
@@ -713,6 +759,7 @@ fn read_chrome(path: &Path) -> crate::Result<Chrome> {
         .ok_or(crate::Error::PreferencesNotObject)?;
     // A file written before the sort existed simply keeps the default.
     let agent_sort = AgentSort::parse(object.get("agent_sort"));
+    let space_sort = SpaceSort::parse(object.get("space_sort"));
     let sidebar_width = match object.get("sidebar_width_px") {
         None | Some(serde_json::Value::Null) => None,
         Some(value) => {
@@ -732,6 +779,7 @@ fn read_chrome(path: &Path) -> crate::Result<Chrome> {
         sidebar_width,
         sidebar_split,
         agent_sort,
+        space_sort,
     })
 }
 
@@ -767,6 +815,7 @@ fn write_chrome(path: &Path, chrome: Chrome) -> crate::Result<()> {
                     split.is_finite() && (0.1..=0.9).contains(split)
                 }),
                 "agent_sort": chrome.agent_sort.to_string(),
+                "space_sort": chrome.space_sort.to_string(),
             }),
         )?;
         file.write_all(b"\n")?;
@@ -855,6 +904,7 @@ mod tests {
                 sidebar_width: Some(width as f32),
                 sidebar_split: Some(0.4),
                 agent_sort: AgentSort::Priority,
+                space_sort: SpaceSort::Manual,
             });
         }
         let worker = preferences.worker.take().unwrap();
@@ -868,6 +918,7 @@ mod tests {
                 sidebar_width: Some(100.0),
                 sidebar_split: Some(0.4),
                 agent_sort: AgentSort::Priority,
+                space_sort: SpaceSort::Manual,
             }
         );
         preferences.save(Chrome::default());
@@ -892,11 +943,19 @@ mod tests {
                     sidebar_width: Some(240.0),
                     sidebar_split: None,
                     agent_sort: AgentSort::Grouped,
+                    space_sort: SpaceSort::Manual,
                 },
             ),
             (
-                r#"{"sidebar_width_px": null, "agent_sort": "sideways"}"#,
+                r#"{"sidebar_width_px": null, "agent_sort": "sideways", "space_sort": "loud"}"#,
                 Chrome::default(),
+            ),
+            (
+                r#"{"sidebar_width_px": null, "space_sort": "attention"}"#,
+                Chrome {
+                    space_sort: SpaceSort::Attention,
+                    ..Chrome::default()
+                },
             ),
             (
                 r#"{"sidebar_width_px": 200.0, "agent_sort": "priority"}"#,
@@ -904,6 +963,7 @@ mod tests {
                     sidebar_width: Some(200.0),
                     sidebar_split: None,
                     agent_sort: AgentSort::Priority,
+                    space_sort: SpaceSort::Manual,
                 },
             ),
         ] {
@@ -915,6 +975,7 @@ mod tests {
             sidebar_width: Some(321.0),
             sidebar_split: None,
             agent_sort: AgentSort::Priority,
+            space_sort: SpaceSort::Attention,
         };
         write_chrome(&path, chrome).unwrap();
         assert_eq!(read_chrome(&path).unwrap(), chrome);
@@ -943,11 +1004,13 @@ mod tests {
                 sidebar_width: Some(160.),
                 sidebar_split: None,
                 agent_sort: AgentSort::Grouped,
+                space_sort: SpaceSort::Manual,
             },
             Chrome {
                 sidebar_width: Some(400.),
                 sidebar_split: Some(0.6),
                 agent_sort: AgentSort::Priority,
+                space_sort: SpaceSort::Manual,
             },
             Chrome::default(),
         ];
@@ -1002,6 +1065,7 @@ mod tests {
                         sidebar_width: Some(width),
                         sidebar_split: None,
                         agent_sort: AgentSort::default(),
+                        space_sort: SpaceSort::Manual,
                     }
                 )
                 .is_err()
@@ -1011,6 +1075,7 @@ mod tests {
             sidebar_width: Some(237.5),
             sidebar_split: None,
             agent_sort: AgentSort::default(),
+            space_sort: SpaceSort::Manual,
         };
         write_chrome(&path, chrome).unwrap();
         assert_eq!(read_chrome(&path).unwrap(), chrome);
@@ -1025,6 +1090,7 @@ mod tests {
             sidebar_width: Some(240.0),
             sidebar_split: None,
             agent_sort: AgentSort::Priority,
+            space_sort: SpaceSort::Manual,
         };
         for split in [
             "null", "0", "-1", "0.099", "0.901", "1e100", "1e-100", "\"0.5\"", "true", "[]", "{}",
@@ -1067,6 +1133,7 @@ mod tests {
                 sidebar_width: Some(240.0),
                 sidebar_split,
                 agent_sort: AgentSort::Priority,
+                space_sort: SpaceSort::Manual,
             };
             write_chrome(&path, chrome).unwrap();
             let stored: serde_json::Value =

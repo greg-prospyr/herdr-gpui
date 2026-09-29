@@ -478,6 +478,164 @@ fn terminal_redraws_reuse_the_cached_sidebar(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn attention_order_floats_what_needs_you_and_animates_without_rebuilding_rows(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::{
+        preferences::SpaceSort,
+        spaces::{Recency, SpaceKey},
+    };
+    use herdr_client::protocol::AgentStatus;
+    let (fixture, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            let mut view = fixture_window(window, cx);
+            let mut snapshot = snapshot(3);
+            for space in &mut snapshot.workspaces {
+                space.agent_status = AgentStatus::Idle;
+            }
+            snapshot.workspaces[2].agent_status = AgentStatus::Blocked;
+            view.live.snapshot = Some(Arc::new(snapshot));
+            view
+        });
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        SidebarFixture(view)
+    });
+    let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, cx| view.read(cx).sidebar_view.read(cx).renders)
+    };
+    let order = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.space_avatars.slot_ids())
+    };
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    assert!(order(cx).is_empty(), "manual order shows no avatars");
+    assert!(cx.debug_bounds("github-herdr").is_some());
+
+    // w1 was touched once; w0 is focused, which is touched now.
+    cx.update(|_, cx| Recency::touch(cx, SpaceKey::new(crate::endpoint::LOCAL, "w1"), 1));
+    let toggle = cx.debug_bounds("spaces-sort").unwrap();
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.space_sort),
+        SpaceSort::Attention
+    );
+    assert_eq!(order(cx), ["w2", "w0", "w1"]);
+    let avatar = cx.debug_bounds("avatar-herdr").unwrap();
+    assert_eq!(avatar.size.width, avatar.size.height);
+    assert_eq!(f32::from(avatar.size.width) % 16., 0.);
+    assert!(cx.debug_bounds("github-herdr").is_none());
+
+    // Avatar frames redraw the window, not the rows.
+    let first = renders(cx);
+    for _ in 0..3 {
+        view.update(cx, |view, cx| view.space_avatars.redraw(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    assert_eq!(renders(cx), first);
+    assert_eq!(order(cx), ["w2", "w0", "w1"]);
+
+    // With the pointer over the list, a newly blocked space waits its turn.
+    let block = |cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            let snapshot = Arc::make_mut(view.live.snapshot.as_mut().unwrap());
+            snapshot.workspaces[1].agent_status = AgentStatus::Blocked;
+            snapshot.revision += 1;
+            cx.notify();
+        });
+    };
+    view.update(cx, |view, _| view.spaces_hovered = true);
+    block(cx);
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    assert_eq!(order(cx), ["w2", "w0", "w1"]);
+    // Leaving lets it rise, gliding from where it was.
+    view.update(cx, |view, cx| {
+        view.spaces_hovered = false;
+        cx.notify();
+    });
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    assert_eq!(order(cx), ["w1", "w2", "w0"]);
+    view.read_with(cx, |view, _| {
+        let (offset, moving) = view.space_slides.borrow().offset(
+            &crate::spaces::row_key(crate::endpoint::LOCAL, "w1"),
+            std::time::Instant::now(),
+        );
+        assert!(moving && offset > 0., "{offset}");
+        // Its avatar plays the blocked shake.
+        assert_eq!(
+            view.space_avatars.next_wake(std::time::Instant::now()),
+            crate::pixel_avatar::Wake::Frame
+        );
+    });
+}
+
+#[gpui::test]
+fn attention_order_ranks_every_machine_in_one_list_naming_each(cx: &mut gpui::TestAppContext) {
+    use crate::{
+        preferences::SpaceSort,
+        spaces::{Recency, SpaceKey},
+    };
+    use herdr_client::protocol::AgentStatus;
+    let (fixture, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            let mut view = fixture_window(window, cx);
+            view.space_sort = SpaceSort::Attention;
+            let mut local = snapshot(2);
+            for space in &mut local.workspaces {
+                space.agent_status = AgentStatus::Idle;
+            }
+            view.live.snapshot = Some(Arc::new(local.clone()));
+            // The same daemon IDs on another machine are other spaces.
+            let mut remote = local;
+            remote.workspaces[0].label = "adscreator".into();
+            remote.workspaces[1].label = "omarchy-idle".into();
+            remote.workspaces[0].agent_status = AgentStatus::Done;
+            remote.workspaces[0].focused = false;
+            let mut omarchy = crate::endpoint::Endpoint::new(
+                "ssh:omarchy".into(),
+                "Omarchy".into(),
+                ConnectTarget::Ssh {
+                    target: "me@omarchy".into(),
+                    session: "default".into(),
+                },
+                true,
+            );
+            omarchy.live.snapshot = Some(Arc::new(remote));
+            view.endpoints.push(omarchy);
+            view
+        });
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        SidebarFixture(view)
+    });
+    let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+    // The remote idle space was touched after the local unfocused one.
+    cx.update(|_, cx| {
+        Recency::touch(cx, SpaceKey::new(crate::endpoint::LOCAL, "w1"), 1);
+        Recency::touch(cx, SpaceKey::new("ssh:omarchy", "w1"), 2);
+    });
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    let rows = view.read_with(cx, |view, _| {
+        view.space_avatars
+            .slot_keys()
+            .into_iter()
+            .map(|key| format!("{}/{}", key.endpoint, key.id))
+            .collect::<Vec<_>>()
+    });
+    // Done on Omarchy first, then the focused local space, then by touch.
+    assert_eq!(
+        rows,
+        ["ssh:omarchy/w0", "local/w0", "ssh:omarchy/w1", "local/w1"]
+    );
+    // One list: no machine headings, and every row names its machine.
+    assert!(cx.debug_bounds("host-local").is_none());
+    assert!(cx.debug_bounds("host-ssh:omarchy").is_none());
+    let chip = cx.debug_bounds("machine-adscreator").unwrap();
+    let branch = cx.debug_bounds("detail-adscreator").unwrap();
+    assert!(chip.right() <= branch.left());
+    assert!(cx.debug_bounds("machine-herdr").is_some());
+}
+
+#[gpui::test]
 fn sidebar_allocates_text_width(cx: &mut gpui::TestAppContext) {
     let (fixture, cx) = cx.add_window_view(|window, cx| {
         crate::bind_keys(cx);
@@ -1207,6 +1365,15 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
             cx.new(|_| crate::sidebar::SidebarView::new(weak))
         },
         surface_signal: cx.new(|_| crate::window::SurfaceSignal),
+        space_avatars: crate::window::AvatarLayer::new(cx),
+        space_sort: Default::default(),
+        space_sort_modified: false,
+        space_slides: Default::default(),
+        space_heads: Default::default(),
+        space_rows: Default::default(),
+        spaces_hovered: false,
+        _space_avatar_choices: cx
+            .observe_global::<crate::pixel_avatar::AvatarStore>(|_, cx| cx.notify()),
         _sidebar_invalidation: HerdrWindow::invalidate_sidebar(cx),
         browser: crate::browser::Browser::new(cx),
         _browser_tabs: cx.observe_global::<crate::browser::Store>(|_, cx| cx.notify()),

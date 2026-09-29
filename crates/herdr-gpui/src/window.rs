@@ -3,6 +3,8 @@
 //! split by responsibility across the submodules below; the fields live here
 //! because every one of them describes this window's own presentation state.
 
+mod avatar_layer;
+pub(crate) use avatar_layer::AvatarLayer;
 mod clipboard;
 mod commands;
 mod drop_hover;
@@ -162,6 +164,22 @@ pub(crate) struct HerdrWindow {
     /// Notified in place of this view by a surface-only update, which redraws
     /// the window while the cached sidebar keeps its layout.
     pub(crate) surface_signal: Entity<SurfaceSignal>,
+    /// Space avatars, painted over the cached sidebar; see `avatar_layer`.
+    pub(crate) space_avatars: AvatarLayer,
+    /// How the Spaces list is ordered, and whether the user changed it
+    /// before the saved preference loaded.
+    pub(crate) space_sort: preferences::SpaceSort,
+    pub(crate) space_sort_modified: bool,
+    /// Where each ranked space row last rested, so a reordered row glides.
+    pub(crate) space_slides: std::cell::RefCell<crate::spaces::Slides>,
+    /// The ranked order last shown, held while the pointer is over the list
+    /// so no row moves out from under it.
+    pub(crate) space_heads: std::cell::RefCell<Vec<String>>,
+    /// Each row's child index in the last spaces list, for its measured height.
+    pub(crate) space_rows:
+        std::cell::RefCell<std::collections::HashMap<crate::spaces::SpaceKey, usize>>,
+    pub(crate) spaces_hovered: bool,
+    pub(crate) _space_avatar_choices: Subscription,
     pub(crate) _sidebar_invalidation: Subscription,
     /// Browser tabs this window shows, and its pages for them.
     pub(crate) browser: crate::browser::Browser,
@@ -232,6 +250,9 @@ impl HerdrWindow {
             }
             if !self.agent_sort_modified {
                 self.agent_sort = chrome.agent_sort;
+            }
+            if !self.space_sort_modified {
+                self.space_sort = chrome.space_sort;
             }
             cx.notify();
         }
@@ -455,6 +476,16 @@ impl HerdrWindow {
             _poll: poll,
             sidebar_view,
             surface_signal: cx.new(|_| SurfaceSignal),
+            space_avatars: AvatarLayer::new(cx),
+            space_sort: preferences::SpaceSort::default(),
+            space_sort_modified: false,
+            space_slides: Default::default(),
+            space_heads: Default::default(),
+            space_rows: Default::default(),
+            spaces_hovered: false,
+            // An avatar chosen in another window changes this one's rows too.
+            _space_avatar_choices: cx
+                .observe_global::<crate::pixel_avatar::AvatarStore>(|_, cx| cx.notify()),
             _sidebar_invalidation: Self::invalidate_sidebar(cx),
             browser: crate::browser::Browser::new(cx),
             // Another window, or an agent, may open or close a tab.

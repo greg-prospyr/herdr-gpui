@@ -24,6 +24,8 @@ pub(super) enum RowIcon {
     None,
     Mark,
     Avatar(Arc<Image>),
+    /// A slot the window's avatar layer paints a space's pixel avatar into.
+    Pixel(AnyElement),
 }
 
 impl RowIcon {
@@ -39,6 +41,7 @@ impl RowIcon {
                 .with_fallback(move || github_mark(color).size_full().into_any_element())
                 .with_loading(move || github_mark(color).size_full().into_any_element())
                 .into_any_element(),
+            Self::Pixel(slot) => slot,
         }
     }
 }
@@ -310,10 +313,19 @@ pub(super) fn row(
     // sidebar config names it. Painted at the row's trailing edge in the dot's
     // color so a status reads at a glance, not only by hue.
     status_text: Option<&'static str>,
+    // The machine a row's space is on, as a small chip before its detail.
+    host: Option<&str>,
     look: SidebarLook,
     appearance: (&FontConfig, &Theme),
 ) -> Div {
     let (font, theme) = appearance;
+    // A pixel avatar gets a column of its own beside the text, as tall as
+    // the row's lines allow in whole points per sprite pixel, rather than
+    // the inline icon's twelve points, which would blur its pixels.
+    let (workspace_icon, avatar) = match workspace_icon {
+        RowIcon::Pixel(slot) => (RowIcon::None, Some(slot)),
+        icon => (icon, None),
+    };
     let focused = state.selected;
     let layout = look.density;
     let padding = layout.padding();
@@ -342,8 +354,18 @@ pub(super) fn row(
     };
     let arrow_reserve = if reserve_arrow { ARROW_RESERVE } else { 0. };
     let arrow_absent = arrow.is_none();
-    let available =
-        (look.content_width(width) - STATUS_WIDTH - gap - indent - arrow_reserve).max(0.);
+    let avatar_side = avatar.as_ref().map(|_| {
+        let lines = if show_detail { 2. } else { 1. };
+        let grid = crate::pixel_avatar::GRID as f32;
+        (lines * line_height(font) / grid).floor().max(1.) * grid
+    });
+    let available = (look.content_width(width)
+        - STATUS_WIDTH
+        - gap
+        - indent
+        - arrow_reserve
+        - avatar_side.map_or(0., |side| side + gap))
+    .max(0.);
     // Narrow sidebars and large fonts can leave less room than a badge needs.
     // Clip its column within the row rather than painting over the terminal.
     let badge_width = badge.as_ref().map_or(0., |badge| {
@@ -435,6 +457,15 @@ pub(super) fn row(
         } else {
             status_indicator(status, font)
         })
+        .when_some(avatar.zip(avatar_side), |row, (slot, side)| {
+            row.child(
+                div()
+                    .debug_selector(|| format!("avatar-{key}"))
+                    .size(px(side))
+                    .flex_none()
+                    .child(slot),
+            )
+        })
         .child(
             div()
                 .flex()
@@ -486,6 +517,23 @@ pub(super) fn row(
                             .when_some(agent_detail, |line, icon| {
                                 line.child(agent_mark(key, icon, agent_size, detail_color, font))
                             })
+                            .when_some(host, |line, host| {
+                                line.flex().items_center().child(
+                                    div()
+                                        .debug_selector(|| format!("machine-{key}"))
+                                        .flex_none()
+                                        .max_w(px(label_width * 0.6))
+                                        .truncate()
+                                        .mr(px(6.))
+                                        .px(px(4.))
+                                        .rounded(px(3.))
+                                        .border_1()
+                                        .border_color(rgb(theme.active))
+                                        .text_size(px((font.size - 2.).max(9.)))
+                                        .text_color(rgb(theme.muted))
+                                        .child(label_text(host)),
+                                )
+                            })
                             .child(
                                 div()
                                     .debug_selector(|| format!("detail-{key}"))
@@ -494,9 +542,16 @@ pub(super) fn row(
                                     } else {
                                         0.
                                     }))
-                                    .w(px((label_width
-                                        - agent_detail.map_or(0., |_| agent_reserve))
-                                    .max(0.)))
+                                    .map(|detail| {
+                                        // Beside a chip the detail takes the room left.
+                                        if host.is_some() {
+                                            detail.flex_1().min_w_0()
+                                        } else {
+                                            detail.w(px((label_width
+                                                - agent_detail.map_or(0., |_| agent_reserve))
+                                            .max(0.)))
+                                        }
+                                    })
                                     .truncate()
                                     .text_color(rgb(detail_color))
                                     .child(label_text(detail)),

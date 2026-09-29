@@ -13,12 +13,13 @@ use super::{
     reorder::{self, Plan},
     row::{RowIcon, RowLift, RowTree, removing_dot},
     sidebar_width, sorted_agents, visible_workspace_entries,
-    workspaces::{workspace_badge, workspace_label},
+    workspaces::{spaces_sort, workspace_badge, workspace_label},
 };
 use crate::{
     Command, HerdrWindow, NavigationTarget,
     config::{FontConfig, Theme},
     fonts::StyledFont,
+    spaces::SpaceKey,
 };
 use gpui::{prelude::*, *};
 
@@ -59,7 +60,15 @@ impl HerdrWindow {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
-        spaces = spaces.track_scroll(&self.sidebar_scroll[0]);
+        spaces = spaces
+            .track_scroll(&self.sidebar_scroll[0])
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.spaces_hovered = *hovered;
+                // Leaving lets a held order settle into attention order.
+                if !*hovered && this.space_sort == crate::preferences::SpaceSort::Attention {
+                    cx.notify();
+                }
+            }));
         agents = agents.track_scroll(&self.sidebar_scroll[1]);
         let multi = self.endpoints.len() > 1;
         let mut agent_count = 0;
@@ -74,13 +83,50 @@ impl HerdrWindow {
         let mut drop_dragged = 0;
         let now = std::time::Instant::now();
         let mut sliding = false;
+        // Attention order ranks spaces by what needs you; see `crate::spaces`.
+        let attention = self.space_sort == crate::preferences::SpaceSort::Attention;
+        self.clear_avatar_slots();
+        // Each row's child index in this list, for next frame's heights.
+        let mut space_layout = std::collections::HashMap::new();
+        // In attention order every machine's spaces form one ranked list,
+        // drawn once, where the first machine with a snapshot would be.
+        let mut merged = attention.then(|| self.ranked_spaces(cx));
+        if let Some(merged) = &merged {
+            // Resting tops from the heights the last frame laid out, so a
+            // reordered row glides from where it was.
+            let rows = self.space_rows.borrow();
+            let mut top = 0.;
+            let tops: Vec<_> = merged
+                .iter()
+                .filter_map(|(endpoint_index, (index, _, _))| {
+                    let endpoint = &self.endpoints[*endpoint_index];
+                    let live = if *endpoint_index == self.selected_endpoint {
+                        &self.live
+                    } else {
+                        &endpoint.live
+                    };
+                    let id = &live.snapshot.as_ref()?.workspaces[*index].workspace_id;
+                    let height = rows
+                        .get(&SpaceKey::new(&endpoint.id, id))
+                        .and_then(|row| self.sidebar_scroll[0].bounds_for_item(*row))
+                        .map_or(0., |bounds| f32::from(bounds.size.height));
+                    let at = top;
+                    top += height;
+                    Some((crate::spaces::row_key(&endpoint.id, id), at))
+                })
+                .collect();
+            self.space_slides.borrow_mut().arrange(tops, now);
+        } else {
+            *self.space_slides.borrow_mut() = Default::default();
+        }
         for (endpoint_index, endpoint) in self.endpoints.iter().enumerate() {
             if !self.device_visible(&endpoint.id) {
                 continue;
             }
             let selected = endpoint_index == self.selected_endpoint;
             let endpoint_id = endpoint.id.clone();
-            if multi {
+            // The ranked list names each row's machine instead of heading it.
+            if multi && !attention {
                 let collapse_id = endpoint_id.clone();
                 let select_id = endpoint_id.clone();
                 let menu_id = endpoint_id.clone();
@@ -201,11 +247,18 @@ impl HerdrWindow {
             } else {
                 &endpoint.collapsed_repos
             };
-            let entries = visible_workspace_entries(&snapshot.workspaces, collapsed_repos);
+            let items: Vec<(usize, crate::spaces::Entry)> = if attention {
+                merged.take().unwrap_or_default()
+            } else {
+                visible_workspace_entries(&snapshot.workspaces, collapsed_repos)
+                    .into_iter()
+                    .map(|entry| (endpoint_index, entry))
+                    .collect()
+            };
             let drag = self
                 .workspace_drag
                 .as_ref()
-                .filter(|drag| selected && drag.previewing(&snapshot.workspaces));
+                .filter(|drag| selected && !attention && drag.previewing(&snapshot.workspaces));
             let floating = drag.is_some_and(|drag| drag.floating());
             let plan = drag.and_then(|drag| Plan::new(&snapshot.workspaces, &drag.workspace));
             // Each unit's shift for the drop in preview, from the heights the
@@ -217,7 +270,7 @@ impl HerdrWindow {
                     .collect();
                 drop_dragged = plan.dragged();
                 let mut heights = vec![0.; plan.len()];
-                for (position, entry) in entries.iter().enumerate() {
+                for (position, (_, entry)) in items.iter().enumerate() {
                     if let (Some(unit), Some(bounds)) = (
                         plan.unit_of(entry.0),
                         self.sidebar_scroll[0].bounds_for_item(base + position),
@@ -231,15 +284,31 @@ impl HerdrWindow {
                 crate::reorder::preview(&heights, plan.dragged(), slot)
             });
             // A child closes the group when no child follows it.
-            let closes: Vec<bool> = (0..entries.len())
+            let closes: Vec<bool> = (0..items.len())
                 .map(|position| {
-                    entries[position].1 && !entries.get(position + 1).is_some_and(|next| next.1)
+                    items[position].1.1 && !items.get(position + 1).is_some_and(|next| next.1.1)
                 })
                 .collect();
-            for (position, (index, indented, group)) in entries.into_iter().enumerate() {
-                if multi && endpoint.collapsed {
+            for (position, (endpoint_index, (index, indented, group))) in
+                items.into_iter().enumerate()
+            {
+                if multi && !attention && endpoint.collapsed {
                     break;
                 }
+                // A ranked row belongs to its own machine, not the one whose
+                // turn in the loop drew the list.
+                let endpoint = &self.endpoints[endpoint_index];
+                let selected = endpoint_index == self.selected_endpoint;
+                let endpoint_id = endpoint.id.clone();
+                let live = if selected { &self.live } else { &endpoint.live };
+                let Some(snapshot) = &live.snapshot else {
+                    continue;
+                };
+                let collapsed_repos = if endpoint_index == 0 {
+                    &self.collapsed_repos
+                } else {
+                    &endpoint.collapsed_repos
+                };
                 let workspace = &snapshot.workspaces[index];
                 if selected && workspace.focused {
                     highlighted[0] = Some(space_rows);
@@ -258,8 +327,20 @@ impl HerdrWindow {
                         sliding |= moving;
                         px(at)
                     }
+                    _ if attention => {
+                        let (offset, moving) = self.space_slides.borrow().offset(
+                            &crate::spaces::row_key(&endpoint.id, &workspace.workspace_id),
+                            now,
+                        );
+                        sliding |= moving;
+                        px(offset)
+                    }
                     _ => px(0.),
                 };
+                space_layout.insert(
+                    SpaceKey::new(&endpoint.id, &workspace.workspace_id),
+                    space_rows,
+                );
                 if let Some(unit) = unit {
                     drop_rows.push((unit, space_rows, shift));
                 }
@@ -306,7 +387,11 @@ impl HerdrWindow {
                         workspace,
                         label,
                         tree,
-                        icon: if indented {
+                        icon: if attention {
+                            let key = SpaceKey::new(&endpoint.id, &workspace.workspace_id);
+                            let style = crate::pixel_avatar::AvatarStore::style(cx, &key);
+                            RowIcon::Pixel(self.avatar_slot(key, style).into_any_element())
+                        } else if indented {
                             RowIcon::None
                         } else {
                             self.avatars
@@ -317,6 +402,7 @@ impl HerdrWindow {
                         },
                         fold,
                         grouped,
+                        host: (attention && multi).then_some(endpoint.label.as_str()),
                         badge: workspace_badge(
                             workspace,
                             (endpoint_index == self.selected_endpoint)
@@ -431,8 +517,9 @@ impl HerdrWindow {
                     }))
                 })
                 // Holding a press lifts the row for reordering. Another
-                // endpoint's rows would have to select it first.
-                .when(selected, |row| {
+                // endpoint's rows would have to select it first, and in
+                // attention order the daemon's order is not what shows.
+                .when(selected && !attention, |row| {
                     row.on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -491,6 +578,7 @@ impl HerdrWindow {
                 );
             }
         }
+        *self.space_rows.borrow_mut() = space_layout;
         if sliding {
             window.request_animation_frame();
         }
@@ -558,7 +646,11 @@ impl HerdrWindow {
                     })
                     .min_h_0()
                     .overflow_hidden()
-                    .child(header("spaces", font, theme, look))
+                    .child(
+                        header("spaces", font, theme, look)
+                            .justify_between()
+                            .child(spaces_sort(self, cx)),
+                    )
                     .child(spaces)
                     .child(
                         div()

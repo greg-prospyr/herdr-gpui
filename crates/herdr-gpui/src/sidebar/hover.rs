@@ -44,6 +44,7 @@ impl HerdrWindow {
                 sidebar_width: self.sidebar_width,
                 sidebar_split: self.sidebar_split,
                 agent_sort: self.agent_sort,
+                space_sort: self.space_sort,
             });
         }
     }

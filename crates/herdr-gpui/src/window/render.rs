@@ -33,6 +33,7 @@ impl Render for HerdrWindow {
         self.cell_width = self.painter.borrow_mut().cell_width(&font, window, cx);
         // Registers the window for surface-only redraws; see `redraw_terminal`.
         self.surface_signal.read(cx);
+        let avatar_layer = self.render_avatar_layer(window, cx);
         let sidebar = self.sidebar_visible.then(|| {
             crate::sidebar::cached_view(
                 &self.sidebar_view,
@@ -535,6 +536,9 @@ impl Render for HerdrWindow {
                     .flex_1()
                     .min_h_0()
                     .children(sidebar)
+                    // After the sidebar, so avatars paint over their slots,
+                    // and before everything that may cover the sidebar.
+                    .children(avatar_layer)
                     .child(
                         div()
                             .flex()

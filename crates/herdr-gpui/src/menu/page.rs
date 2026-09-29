@@ -32,6 +32,8 @@ pub(crate) enum Page {
     Group,
     Pane,
     RenamePane,
+    /// Choosing a space's avatar, from its menu.
+    Avatar,
     Workspace,
     GitHub,
     /// Titlebar Git actions for the focused checkout, and its commit dialog.
@@ -66,6 +68,8 @@ pub(crate) enum WorkspaceMenuAction {
     GoToTeleported,
     /// Forget that this checkout's work was teleported away.
     ClearTeleported,
+    /// Choose the pixel avatar the space shows in attention order.
+    Avatar,
 }
 
 impl WorkspaceMenuAction {
@@ -83,6 +87,7 @@ impl WorkspaceMenuAction {
             Self::Teleport | Self::GoToTeleported => "icons/teleport.svg",
             Self::TeleportBack => "icons/teleport-back.svg",
             Self::ClearTeleported => "icons/x.svg",
+            Self::Avatar => "icons/user.svg",
             Self::PullRequest => return None,
         })
     }

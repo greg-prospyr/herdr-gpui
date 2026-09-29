@@ -21,6 +21,8 @@ mod worktree_render;
 mod worktree_source;
 
 #[cfg(test)]
+mod avatar_tests;
+#[cfg(test)]
 mod font_size_tests;
 #[cfg(test)]
 mod sessions_tests;

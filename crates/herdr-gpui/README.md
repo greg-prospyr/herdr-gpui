@@ -1067,6 +1067,35 @@ Windows setup) nothing is saved and the window says so.
 - Agents panel header ends with its sort, `grouped` or `priority`, which a
   click flips; an active agent view names itself there instead. Client-local
   and persisted beside the sidebar width, as in the terminal client.
+- The Spaces header ends with its order, `manual` or `attention`, which a click
+  flips; it is client-local and saved beside the sidebar width. Manual keeps the
+  daemon's order, which dragging a row changes for every client. Attention
+  floats the spaces that need you, blocked then done, and orders the rest by
+  when you last focused them, so spaces you leave alone drift down. It is one
+  list across every visible machine: the machine headings give way to a small
+  chip naming each row's machine before its branch, and a space focused on the
+  machine the window shows counts as touched now. A repository and its linked
+  worktrees move as one group. Machine headings, and their collapse arrows and
+  host menus, return in manual order. Only this client's
+  view changes: the daemon's order is untouched, dragging is paused, and the
+  status dots still come from the daemon. When each space was last focused is
+  remembered by this app (`space-recency.json` in its state directory, at most
+  512 spaces), counting a focus change seen from any client.
+  While the pointer is over the list the order holds, so no row moves out from
+  under a click; leaving it lets the list settle, and moved rows glide to their
+  new places.
+  In attention order each space shows an animated pixel avatar in place of the
+  repository owner's icon. It hops when the space finishes, shakes when it
+  blocks, and nudges when work starts, smoothly for under a second; after that
+  a working space glances about at 8 frames a second, blocked and done spaces
+  pulse a mark twice a second, idle ones blink every few seconds, and nothing
+  redraws while every avatar is still. Change avatar in a space's right-click
+  menu picks one of six shapes and ten colors, or returns to its default; the
+  choice is stored by this app only (`space-avatars.json`, at most 512
+  spaces), since the daemon has nowhere to keep it. Rename in the same menu
+  renames the space through the daemon, for every client. The window paints
+  avatars in a layer over the cached sidebar, so an avatar frame redraws the
+  window the way terminal output does, without rebuilding the rows.
 - Resizable sidebar with width persisted per local daemon socket, shared across
   host groups. Drag the divider between Spaces and Agents up or down to resize
   their sections; double-click it to restore an even split. The split is saved

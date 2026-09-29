@@ -297,6 +297,7 @@ impl HerdrWindow {
                 | Page::Group
                 | Page::Pane
                 | Page::RenamePane
+                | Page::Avatar
                 | Page::Host
                 | Page::RemoveDevice
                 | Page::Git
@@ -384,6 +385,7 @@ impl HerdrWindow {
                         | Page::Group
                         | Page::Pane
                         | Page::RenamePane
+                        | Page::Avatar
                         | Page::Host
                         | Page::RemoveDevice
                 ),
@@ -394,6 +396,8 @@ impl HerdrWindow {
                                 180.
                             } else if page == Page::Group {
                                 240.
+                            } else if page == Page::Avatar {
+                                272.
                             } else {
                                 360.
                             },
@@ -634,6 +638,8 @@ impl HerdrWindow {
             panel = panel.child(self.render_tab_menu(cx));
         } else if page == Page::Group {
             panel = panel.child(self.render_group_menu(cx));
+        } else if page == Page::Avatar {
+            panel = panel.child(self.render_avatar_picker(cx));
         } else if matches!(page, Page::Pane | Page::RenamePane) {
             panel = panel.child(self.render_pane_menu(cx));
         } else if page == Page::Keybinds {
@@ -880,6 +886,14 @@ impl HerdrWindow {
                 }
                 if this.menu.page == Some(Page::Group) {
                     this.group_menu_key(event, window, cx);
+                    return;
+                }
+                if this.menu.page == Some(Page::Avatar) {
+                    if matches!(event.keystroke.key.as_str(), "escape" | "enter") {
+                        cx.stop_propagation();
+                        window.prevent_default();
+                        this.dismiss_menu(window, cx);
+                    }
                     return;
                 }
                 if matches!(this.menu.page, Some(Page::Pane | Page::RenamePane)) {

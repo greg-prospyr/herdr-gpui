@@ -6,7 +6,8 @@ use super::{
     RowBadge,
     row::{PrBadge, first_text},
 };
-use crate::config::Theme;
+use crate::{HerdrWindow, config::Theme};
+use gpui::{prelude::*, *};
 use herdr_client::protocol::ClientShellWorkspace;
 use std::collections::{HashMap, HashSet};
 
@@ -92,4 +93,100 @@ pub(crate) fn workspace_label(workspace: &ClientShellWorkspace, indented: bool) 
         .flatten()
         .map(|branch| branch.strip_prefix("worktree/").unwrap_or(branch));
     first_text([branch, Some(&workspace.label)], "workspace")
+}
+
+/// The Spaces header's order, `manual` or `attention`, which a click flips.
+/// Client-local and saved beside the sidebar width, like the agents sort.
+pub(super) fn spaces_sort(window: &HerdrWindow, cx: &mut Context<HerdrWindow>) -> Stateful<Div> {
+    let theme = &window.theme;
+    div()
+        .id("spaces-sort")
+        .debug_selector(|| "spaces-sort".into())
+        .flex_none()
+        .min_w_0()
+        .truncate()
+        .text_color(rgb(theme.muted))
+        .cursor_pointer()
+        .hover(|sort| sort.text_color(rgb(theme.foreground)))
+        .on_click(cx.listener(|this, _, _, cx| {
+            cx.stop_propagation();
+            this.space_sort = this.space_sort.toggled();
+            this.space_sort_modified = true;
+            this.save_chrome();
+            cx.notify();
+        }))
+        .child(super::label_text(&window.space_sort.to_string()))
+}
+
+impl HerdrWindow {
+    /// Every visible machine's space rows as one list in attention order, each
+    /// with the index of the endpoint it is on. A space focused on the machine
+    /// the window shows counts as touched now; another machine's focus counts
+    /// from when this client saw it move there.
+    pub(super) fn ranked_spaces(&self, cx: &App) -> Vec<(usize, crate::spaces::Entry)> {
+        use crate::spaces::{Recency, SpaceKey, Unit, rank, row_key, units, urgency};
+        let mut ranked = Vec::new();
+        let mut rows = Vec::new();
+        for (endpoint_index, endpoint) in self.endpoints.iter().enumerate() {
+            if !self.device_visible(&endpoint.id) {
+                continue;
+            }
+            let selected = endpoint_index == self.selected_endpoint;
+            let live = if selected { &self.live } else { &endpoint.live };
+            let Some(snapshot) = &live.snapshot else {
+                continue;
+            };
+            let collapsed = if endpoint_index == 0 {
+                &self.collapsed_repos
+            } else {
+                &endpoint.collapsed_repos
+            };
+            let entries = visible_workspace_entries(&snapshot.workspaces, collapsed);
+            for unit in units(&entries) {
+                let members = &entries[unit];
+                let spaces = || members.iter().map(|entry| &snapshot.workspaces[entry.0]);
+                let head = &snapshot.workspaces[members[0].0].workspace_id;
+                ranked.push(Unit {
+                    head: row_key(&endpoint.id, head),
+                    urgency: spaces()
+                        .map(|space| urgency(space.agent_status))
+                        .min()
+                        .unwrap_or(u8::MAX),
+                    recency: spaces()
+                        .map(|space| {
+                            if selected && space.focused {
+                                u64::MAX
+                            } else {
+                                Recency::touched(
+                                    cx,
+                                    &SpaceKey::new(&endpoint.id, &space.workspace_id),
+                                )
+                                .unwrap_or(0)
+                            }
+                        })
+                        .max()
+                        .unwrap_or(0),
+                });
+                rows.push(
+                    members
+                        .iter()
+                        .map(|entry| (endpoint_index, entry.clone()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        // A pointer over the list holds its order; leaving lets it settle.
+        let held = self
+            .spaces_hovered
+            .then(|| self.space_heads.borrow().clone());
+        let order = rank(&ranked, held.as_deref());
+        *self.space_heads.borrow_mut() = order
+            .iter()
+            .map(|&index| ranked[index].head.clone())
+            .collect();
+        order
+            .into_iter()
+            .flat_map(|index| std::mem::take(&mut rows[index]))
+            .collect()
+    }
 }

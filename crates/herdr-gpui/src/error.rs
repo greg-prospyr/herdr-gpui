@@ -363,6 +363,10 @@ pub enum Error {
     InvalidBrowserTabs,
     #[error("Invalid saved editor groups")]
     InvalidGroupLayouts,
+    #[error("Invalid saved space avatars")]
+    InvalidSpaceAvatars,
+    #[error("Invalid saved space recency")]
+    InvalidSpaceRecency,
     #[error("Herdr GPUI is not running, or its control socket {} is unreachable: {source}", path.display())]
     ControlUnavailable {
         path: PathBuf,

@@ -26,6 +26,7 @@ impl RowLayout for Herdr {
             grouped,
             badge,
             removing,
+            host,
             ..
         } = row;
         let arrow = fold.map(|fold| {
@@ -49,6 +50,7 @@ impl RowLayout for Herdr {
             arrow,
             badge,
             None,
+            host,
             cx.look,
             (cx.font, cx.theme),
         )
@@ -71,6 +73,7 @@ impl RowLayout for Herdr {
             None,
             None,
             agent.status_text,
+            None,
             cx.look,
             (cx.font, cx.theme),
         )

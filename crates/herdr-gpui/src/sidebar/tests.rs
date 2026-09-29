@@ -351,6 +351,7 @@ fn cells_hand_their_state_and_data_to_the_layout() {
             icon: RowIcon::None,
             fold: None,
             grouped: false,
+            host: None,
             badge: None,
             removing: false,
         })

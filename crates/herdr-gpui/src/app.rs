@@ -193,6 +193,15 @@ pub(crate) fn run() -> std::process::ExitCode {
     } else {
         crate::browser::Store::default()
     };
+    // Nor with chosen space avatars or recency, which they would overwrite.
+    let (space_avatars, space_recency) = if mode == LaunchMode::Normal {
+        (
+            crate::pixel_avatar::AvatarStore::load(),
+            crate::spaces::Recency::load(),
+        )
+    } else {
+        Default::default()
+    };
     // Nor with saved editor groups, which they would overwrite.
     let group_layouts = if mode == LaunchMode::Normal {
         crate::browser::Layouts::load()
@@ -208,6 +217,8 @@ pub(crate) fn run() -> std::process::ExitCode {
             }
             browser_tabs.install(cx);
             group_layouts.install(cx);
+            space_avatars.install(cx);
+            space_recency.install(cx);
             agent_skill.install_global(cx);
             // Only the user's own app answers agents; native test modes stay private.
             if mode == LaunchMode::Normal {

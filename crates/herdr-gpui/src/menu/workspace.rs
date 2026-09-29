@@ -210,11 +210,11 @@ fn close_members(snapshot: &ClientShellSnapshot, workspace: &ClientShellWorkspac
 }
 
 impl HerdrWindow {
-    /// The selected endpoint's workspace a workspace menu is open for. A
-    /// hover menu can target a row that is not focused, so the row marks
-    /// itself while the pointer is over the menu instead.
+    /// The selected endpoint's workspace a workspace menu, or its avatar
+    /// picker, is open for. A hover menu can target a row that is not focused,
+    /// so the row marks itself while the pointer is over the menu instead.
     pub(crate) fn workspace_menu_target(&self) -> Option<&str> {
-        if self.menu.page != Some(Page::Workspace) {
+        if !matches!(self.menu.page, Some(Page::Workspace | Page::Avatar)) {
             return None;
         }
         self.menu.target.as_ref().map(|target| target.id.as_str())
@@ -305,6 +305,10 @@ impl HerdrWindow {
                 items.push((WorkspaceMenuAction::TeleportBack, "Teleport back"));
             }
             items.push((WorkspaceMenuAction::Teleport, "Teleport..."));
+        }
+        // Avatars show only in attention order, so only then can one change.
+        if self.space_sort == crate::preferences::SpaceSort::Attention {
+            items.push((WorkspaceMenuAction::Avatar, "Change avatar"));
         }
         // Only a workspace that heads a group of checkouts can fold anything.
         if let Some(key) = target.group_key() {
@@ -445,6 +449,10 @@ impl HerdrWindow {
             WorkspaceMenuAction::GoToTeleported => self.go_to_teleported(window, cx),
             WorkspaceMenuAction::TeleportBack => self.teleport_back(window, cx),
             WorkspaceMenuAction::ClearTeleported => self.clear_teleport_mark(window, cx),
+            WorkspaceMenuAction::Avatar => {
+                self.menu.page = Some(Page::Avatar);
+                cx.notify();
+            }
         }
     }
 

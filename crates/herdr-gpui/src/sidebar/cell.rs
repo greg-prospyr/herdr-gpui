@@ -58,6 +58,9 @@ pub(super) struct WorkspaceRow<'a> {
     /// Whether the row belongs to a worktree group, which lines its badges up
     /// with the group's fold control.
     pub(super) grouped: bool,
+    /// The machine the space is on, named where rows from several machines
+    /// share one list.
+    pub(super) host: Option<&'a str>,
     pub(super) badge: Option<RowBadge>,
     /// The checkout is being deleted.
     pub(super) removing: bool,
