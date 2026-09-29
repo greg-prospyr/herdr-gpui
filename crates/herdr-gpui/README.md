@@ -594,6 +594,15 @@ On an SSH endpoint, a single supported image is transferred as described below.
 Other regular files and multiple-file drops are streamed using the SSH file-copy
 path below. POSIX quoting is not intended for Windows command shells.
 
+While files are dragged over the window, the pane or popup they would drop into
+is framed, and a card inside it says what the drop will do: paste the paths,
+send the image to the SSH host, or copy the files there. When the first file is
+a PNG, JPEG, GIF, WebP, or BMP image, the card previews it with its format,
+pixel size, and file size. The preview is read and decoded in the background
+from at most 32 MiB and 40 megapixels; a larger image shows only what its
+header says. Moving across panes glides the frame, and nothing is drawn or read
+for pointer moves within one target.
+
 ## SSH File Copies
 
 Drop regular files onto an SSH pane or popup to copy them to that host. A

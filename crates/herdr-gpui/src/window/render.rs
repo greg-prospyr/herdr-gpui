@@ -91,6 +91,7 @@ impl Render for HerdrWindow {
             })
             .map(|(slot, _)| *slot);
         let terminal_gap = terminal_slot.map_or(sidebar_gap, slot_gap);
+        let drop_hover = self.render_drop_hover(terminal_gap, window, cx);
         let terminal = div()
             .id("terminal")
             .debug_selector(|| "terminal".into())
@@ -142,6 +143,7 @@ impl Render for HerdrWindow {
             // nothing for Cut, Copy, or Select All to act on.
             .on_action(cx.listener(|this, _: &crate::actions::Paste, _, cx| this.paste(cx)))
             .on_scroll_wheel(cx.listener(Self::scroll_wheel))
+            .on_drag_move(cx.listener(Self::file_drag_move))
             .on_drop(cx.listener(Self::drop_terminal_files))
             .on_mouse_down(
                 MouseButton::Middle,
@@ -397,7 +399,8 @@ impl Render for HerdrWindow {
                                 .child(div().truncate().child(flash.text.clone())),
                         ),
                 )
-            });
+            })
+            .children(drop_hover);
         // A focus handle belongs to one element: the terminal when drawn,
         // otherwise the group in use.
         let keyboard = terminal_slot

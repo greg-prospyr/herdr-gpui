@@ -11,9 +11,10 @@ use image::{
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::{self, Cursor, Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -24,6 +25,11 @@ const MAX_READ_DURATION: Duration = Duration::from_secs(3);
 pub(super) const MAX_IMAGE_INPUT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODE_PIXELS: u64 = 64 * 1024 * 1024;
 const MAX_DECODE_BYTES: u64 = 256 * 1024 * 1024;
+/// Hover previews read and decode at most this; larger images show only their header.
+const MAX_PREVIEW_INPUT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_PREVIEW_PIXELS: u64 = 40 * 1024 * 1024;
+/// A preview's longest side, sharp at twice the size the card draws it.
+const THUMBNAIL_SIDE: u32 = 480;
 
 pub(super) struct PreparedImage {
     pub extension: &'static str,
@@ -110,61 +116,16 @@ impl Source {
         let (extension, bytes) = match self {
             Self::File { path, extension } => {
                 let deadline = Instant::now() + MAX_READ_DURATION;
-                let mut options = OpenOptions::new();
-                options.read(true);
-                // Validate the descriptor, not the path: a FIFO swapped into the
-                // path before open must not block waiting for a writer.
-                #[cfg(unix)]
-                options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
-                let mut file = options.open(&path).map_err(|source| Error::ImageFile {
-                    operation: "open",
-                    source,
-                })?;
-                let metadata = file.metadata().map_err(|source| Error::ImageFile {
-                    operation: "inspect",
-                    source,
-                })?;
-                if !metadata.is_file() {
-                    return Err(Error::ImageFileType);
-                }
-                if metadata.len() > MAX_IMAGE_INPUT_BYTES as u64 {
+                let (mut file, length) = open_regular(&path)?;
+                if length > MAX_IMAGE_INPUT_BYTES as u64 {
                     return Err(Error::ImageInputTooLarge {
                         limit: MAX_IMAGE_INPUT_BYTES,
                     });
                 }
-                if metadata.len() == 0 {
-                    return Err(Error::ImageSize);
-                }
-                let mut bytes = Vec::new();
-                let mut chunk = [0; 64 * 1024];
-                loop {
-                    if Instant::now() >= deadline {
-                        return Err(Error::ImageReadTimeout);
-                    }
-                    // One extra byte detects growth past the metadata size.
-                    let limit = chunk.len().min(MAX_IMAGE_INPUT_BYTES + 1 - bytes.len());
-                    let read = file.read(&mut chunk[..limit]);
-                    if Instant::now() >= deadline {
-                        return Err(Error::ImageReadTimeout);
-                    }
-                    if matches!(&read, Err(source) if source.kind() == io::ErrorKind::Interrupted) {
-                        continue;
-                    }
-                    let count = read.map_err(|source| Error::ImageFile {
-                        operation: "read",
-                        source,
-                    })?;
-                    if count == 0 {
-                        break;
-                    }
-                    if bytes.len() + count > MAX_IMAGE_INPUT_BYTES {
-                        return Err(Error::ImageInputTooLarge {
-                            limit: MAX_IMAGE_INPUT_BYTES,
-                        });
-                    }
-                    bytes.extend_from_slice(&chunk[..count]);
-                }
-                (extension, bytes)
+                (
+                    extension,
+                    read_limited(&mut file, MAX_IMAGE_INPUT_BYTES, deadline)?,
+                )
             }
             Self::Clipboard(image) => {
                 let extension = match image.format {
@@ -183,6 +144,136 @@ impl Source {
         };
         prepare_bytes(extension, bytes, MAX_CLIPBOARD_IMAGE_PAYLOAD)
     }
+}
+
+/// Opens a nonempty regular file and returns it with its length.
+fn open_regular(path: &Path) -> Result<(File, u64)> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    // Validate the descriptor, not the path: a FIFO swapped into the path
+    // before open must not block waiting for a writer.
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    let file = options.open(path).map_err(|source| Error::ImageFile {
+        operation: "open",
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| Error::ImageFile {
+        operation: "inspect",
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(Error::ImageFileType);
+    }
+    if metadata.len() == 0 {
+        return Err(Error::ImageSize);
+    }
+    Ok((file, metadata.len()))
+}
+
+/// Reads the rest of `file`, failing past `limit` bytes or the deadline.
+fn read_limited(file: &mut File, limit: usize, deadline: Instant) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 64 * 1024];
+    loop {
+        if Instant::now() >= deadline {
+            return Err(Error::ImageReadTimeout);
+        }
+        // One extra byte detects growth past the metadata size.
+        let wanted = chunk.len().min(limit + 1 - bytes.len());
+        let read = file.read(&mut chunk[..wanted]);
+        if Instant::now() >= deadline {
+            return Err(Error::ImageReadTimeout);
+        }
+        if matches!(&read, Err(source) if source.kind() == io::ErrorKind::Interrupted) {
+            continue;
+        }
+        let count = read.map_err(|source| Error::ImageFile {
+            operation: "read",
+            source,
+        })?;
+        if count == 0 {
+            return Ok(bytes);
+        }
+        if bytes.len() + count > limit {
+            return Err(Error::ImageInputTooLarge { limit });
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+}
+
+/// A dropped image as the hover card shows it: a small still, when one could
+/// be made within the preview budget, and what the file is.
+pub(super) struct Thumbnail {
+    pub image: Option<Arc<Image>>,
+    /// Displayed pixel size, after EXIF orientation when the image decoded.
+    pub dimensions: Option<(u32, u32)>,
+    pub bytes: u64,
+}
+
+/// Blocking I/O and decoding: call only on a background executor. A preview
+/// is a glance, so it spends less than a send may: larger files and rasters
+/// report only their header, and animations show their first frame.
+pub(super) fn thumbnail(path: &Path) -> Result<Thumbnail> {
+    thumbnail_within(path, MAX_PREVIEW_INPUT_BYTES, MAX_PREVIEW_PIXELS)
+}
+
+fn thumbnail_within(path: &Path, max_input: usize, max_pixels: u64) -> Result<Thumbnail> {
+    let deadline = Instant::now() + MAX_READ_DURATION;
+    let (mut file, bytes) = open_regular(path)?;
+    if bytes > max_input as u64 {
+        let dimensions = ImageReader::new(io::BufReader::new(file))
+            .with_guessed_format()
+            .ok()
+            .and_then(|reader| reader.into_dimensions().ok());
+        return Ok(Thumbnail {
+            image: None,
+            dimensions,
+            bytes,
+        });
+    }
+    let data = read_limited(&mut file, max_input, deadline)?;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_DECODE_BYTES);
+    let mut reader = ImageReader::new(Cursor::new(&data))
+        .with_guessed_format()
+        .map_err(|source| Error::ImageFile {
+            operation: "read",
+            source,
+        })?;
+    reader.limits(limits.clone());
+    let decoder = reader.into_decoder().map_err(Error::ImageDecode)?;
+    let (width, height) = decoder.dimensions();
+    if u64::from(width) * u64::from(height) > max_pixels {
+        return Ok(Thumbnail {
+            image: None,
+            dimensions: Some((width, height)),
+            bytes,
+        });
+    }
+    let raster = decode_limited(decoder, limits)?;
+    let dimensions = Some((raster.width(), raster.height()));
+    // `thumbnail` would enlarge a small image; the card scales it down anyway.
+    let raster = if raster.width() > THUMBNAIL_SIDE || raster.height() > THUMBNAIL_SIDE {
+        raster.thumbnail(THUMBNAIL_SIDE, THUMBNAIL_SIDE)
+    } else {
+        raster
+    };
+    let raster = raster.into_rgba8();
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png)
+        .write_image(
+            raster.as_raw(),
+            raster.width(),
+            raster.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(Error::ImageEncode)?;
+    Ok(Thumbnail {
+        image: Some(Arc::new(Image::from_bytes(ImageFormat::Png, png))),
+        dimensions,
+        bytes,
+    })
 }
 
 fn prepare_bytes(
@@ -955,6 +1046,67 @@ mod tests {
         assert!(matches!(
             prepare_bytes("png", noisy_png(false), 1),
             Err(Error::ImageTooLarge { limit: 1 })
+        ));
+    }
+
+    fn write_png(directory: &Path, name: &str, width: u32, height: u32) -> PathBuf {
+        let path = directory.join(name);
+        DynamicImage::ImageRgb8(image::RgbImage::new(width, height))
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+        path
+    }
+
+    fn thumbnail_size(thumbnail: &Thumbnail) -> (u32, u32) {
+        let image = thumbnail.image.as_ref().unwrap();
+        assert_eq!(image.format, ImageFormat::Png);
+        image::load_from_memory(&image.bytes)
+            .unwrap()
+            .into_rgba8()
+            .dimensions()
+    }
+
+    #[test]
+    fn thumbnails_fit_the_preview_side_keep_aspect_and_never_enlarge() {
+        let directory = tempfile::tempdir().unwrap();
+        let wide = write_png(directory.path(), "wide.png", 1200, 600);
+        let preview = thumbnail(&wide).unwrap();
+        assert_eq!(preview.dimensions, Some((1200, 600)));
+        assert_eq!(preview.bytes, fs::metadata(&wide).unwrap().len());
+        assert_eq!(
+            thumbnail_size(&preview),
+            (THUMBNAIL_SIDE, THUMBNAIL_SIDE / 2)
+        );
+        let small = write_png(directory.path(), "small.png", 40, 30);
+        assert_eq!(thumbnail_size(&thumbnail(&small).unwrap()), (40, 30));
+    }
+
+    #[test]
+    fn previews_past_their_budget_report_only_the_header() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_png(directory.path(), "large.png", 300, 200);
+        let length = fs::metadata(&path).unwrap().len();
+        let over_input = thumbnail_within(&path, length as usize - 1, MAX_PREVIEW_PIXELS).unwrap();
+        assert!(over_input.image.is_none());
+        assert_eq!(over_input.dimensions, Some((300, 200)));
+        assert_eq!(over_input.bytes, length);
+        let over_pixels = thumbnail_within(&path, MAX_PREVIEW_INPUT_BYTES, 300 * 200 - 1).unwrap();
+        assert!(over_pixels.image.is_none());
+        assert_eq!(over_pixels.dimensions, Some((300, 200)));
+    }
+
+    #[test]
+    fn previews_reject_what_is_not_a_readable_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let text = directory.path().join("notes.png");
+        fs::write(&text, "not an image").unwrap();
+        assert!(thumbnail(&text).is_err());
+        let empty = directory.path().join("empty.png");
+        File::create(&empty).unwrap();
+        assert!(matches!(thumbnail(&empty), Err(Error::ImageSize)));
+        assert!(matches!(
+            thumbnail(directory.path()),
+            Err(Error::ImageFileType)
         ));
     }
 }
