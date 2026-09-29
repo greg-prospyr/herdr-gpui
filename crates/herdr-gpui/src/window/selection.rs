@@ -7,6 +7,22 @@ use super::HerdrWindow;
 use crate::terminal::Selection;
 use gpui::{ClipboardItem, Context, Pixels, Point};
 
+/// The copy flash's words: the text itself when it is one short line, or
+/// how much was copied, so the flash says exactly what the clipboard holds.
+fn copied_message(text: &str) -> String {
+    const PREVIEW: usize = 40;
+    let lines = text.lines().count();
+    if lines > 1 {
+        return format!("Copied {lines} lines");
+    }
+    let line = text.trim();
+    if line.chars().count() <= PREVIEW {
+        format!("Copied \u{201c}{line}\u{201d}")
+    } else {
+        format!("Copied {} characters", line.chars().count())
+    }
+}
+
 impl HerdrWindow {
     /// Starts a selection under the pointer, discarding the previous one. A
     /// double click starts on the link or word under it and a triple click on
@@ -70,33 +86,37 @@ impl HerdrWindow {
             return false;
         }
         let selected = !self.selection_is_empty();
-        let copied = selected && self.copy_selection(cx);
+        let copied = selected.then(|| self.copy_selection(cx)).flatten();
         // The gesture is over either way: nothing stays highlighted behind it.
         self.selection = None;
-        if copied && self.config.clipboard_toast.enabled {
-            self.show_flash(super::Flash::success("copied to clipboard"), cx);
+        if let Some(text) = copied
+            && self.config.clipboard_toast.enabled
+        {
+            self.show_flash(super::Flash::success(copied_message(&text)), cx);
         }
         cx.notify();
         selected
     }
 
-    /// Writes the current selection to the clipboard, reporting whether the
-    /// text got there.
-    fn copy_selection(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Writes the current selection to the clipboard, returning the text
+    /// that got there. A selection of nothing but blanks is not copied: a
+    /// stray drag over empty cells must not replace what the clipboard holds.
+    fn copy_selection(&mut self, cx: &mut Context<Self>) -> Option<String> {
         let text = {
             let (Some(selection), Some(surface)) = (&self.selection, &self.live.surface) else {
-                return false;
+                return None;
             };
             selection.text(surface, self.cell_width, self.config.terminal.line_height())
         };
         match text {
+            Ok(text) if text.trim().is_empty() => None,
             Ok(text) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                true
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                Some(text)
             }
             Err(error) => {
                 self.local_error = Some(format!("Selection not copied: {error}"));
-                false
+                None
             }
         }
     }
@@ -275,13 +295,61 @@ mod tests {
         cx.simulate_mouse_up(at(5., 0.), MouseButton::Left, Modifiers::default());
         view.update(cx, |view, _| {
             let (flash, expires) = view.flash.clone().expect("a copy reports itself");
-            assert_eq!(flash, crate::window::Flash::success("copied to clipboard"));
+            // It says what the clipboard now holds.
+            assert_eq!(flash.tone, crate::window::flash::Tone::Success);
+            assert!(flash.text.starts_with("Copied \u{201c}"), "{}", flash.text);
             assert!(!view.tick_flash(expires - Duration::from_nanos(1)));
             assert!(view.flash.is_some());
             assert!(view.tick_flash(expires));
             assert!(view.flash.is_none());
             assert!(!view.tick_flash(expires));
         });
+    }
+
+    #[gpui::test]
+    fn blank_selections_never_replace_the_clipboard(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = fixture_window(window, cx);
+            let mut frame = surface(&["hi          ", "            "], 12);
+            let snapshot = view.live.snapshot.as_ref().unwrap();
+            frame.boot_id = snapshot.boot_id.clone();
+            frame.projection_revision = snapshot.revision;
+            view.live.surface = Some(Arc::new(frame));
+            view
+        });
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("kept".into()));
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let (origin, cell) = view.read_with(cx, |view, _| {
+            (
+                view.bounds.origin,
+                (view.cell_width, view.config.terminal.line_height()),
+            )
+        });
+        let at = |column: f32, row: f32| -> Point<Pixels> {
+            origin + point(px(column * cell.0), px(row * cell.1))
+        };
+        let clipboard = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+        };
+        // Blank cells on a line, then a whole blank row: nothing to copy.
+        for (from, to) in [(at(4., 0.), at(10., 0.)), (at(0., 1.), at(11.9, 1.))] {
+            cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+            assert_eq!(clipboard(cx), Some("kept".into()));
+            view.read_with(cx, |view, _| {
+                assert!(view.selection.is_none(), "the release still deselects");
+                assert!(view.flash.is_none(), "nothing copied, nothing reported");
+            });
+        }
+        // Text with blanks around it still copies as selected.
+        cx.simulate_mouse_down(at(0., 0.), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(at(6., 0.), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(at(6., 0.), MouseButton::Left, Modifiers::default());
+        assert_eq!(clipboard(cx), Some("hi    ".into()));
     }
 
     #[gpui::test]
@@ -373,7 +441,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn application_mouse_takes_precedence_and_shift_keeps_copy_and_links(cx: &mut TestAppContext) {
+    fn mouse_reporting_panes_select_on_drag_and_forward_clicks_and_option_drags(
+        cx: &mut TestAppContext,
+    ) {
         let url = "https://example.com/x";
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut view = fixture_window(window, cx);
@@ -392,15 +462,42 @@ mod tests {
         });
         let (origin, width) = view.read_with(cx, |view, _| (view.bounds.origin, view.cell_width));
         let at = |column: f32| origin + point(px(column * width), px(10.));
+        // A plain press is held: it may be a click for the application or
+        // the start of a selection, and a link under it is the application's.
         cx.simulate_mouse_down(at(0.), MouseButton::Left, Modifiers::default());
         view.read_with(cx, |view, _| {
-            assert!(view.selection.is_none());
+            assert!(view.selection.is_some());
+            assert!(view.held_click.is_some());
             assert!(view.pressed_terminal_link.is_none());
         });
+        // Dragging selects here, and releasing copies and says so.
         cx.simulate_mouse_move(at(20.6), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(at(20.6), MouseButton::Left, Modifiers::default());
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+            Some(url.into())
+        );
+        view.update(cx, |view, _| {
+            assert!(view.held_click.is_none() && view.selection.is_none());
+            let (flash, _) = view.flash.take().expect("a copy reports itself");
+            assert_eq!(flash.text.as_ref(), format!("Copied \u{201c}{url}\u{201d}"));
+        });
+        // A click without a drag copies nothing and opens nothing here: it
+        // goes to the application.
+        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
         cx.simulate_click(at(1.), Modifiers::default());
         assert!(cx.opened_url().is_none());
+        assert!(view.read_with(cx, |view, _| view.flash.is_none()
+            && view.held_click.is_none()));
+        // With Option the drag is the application's, so nothing is copied.
+        let option = Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        cx.simulate_mouse_down(at(0.), MouseButton::Left, option);
+        assert!(view.read_with(cx, |view, _| view.selection.is_none()));
+        cx.simulate_mouse_move(at(20.6), MouseButton::Left, option);
+        cx.simulate_mouse_up(at(20.6), MouseButton::Left, option);
         assert_eq!(
             cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
             Some("kept".into())
@@ -409,6 +506,8 @@ mod tests {
         assert!(view.read_with(cx, |view, _| view.menu.page.is_none()));
         cx.simulate_mouse_up(at(1.), MouseButton::Right, Modifiers::default());
 
+        // Shift still keeps everything local, links included.
+        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
         let shift = Modifiers {
             shift: true,
             ..Default::default()
@@ -424,6 +523,20 @@ mod tests {
         assert!(cx.opened_url().is_none());
         cx.simulate_click(at(1.), shift);
         assert_eq!(cx.opened_url().as_deref(), Some(url));
+    }
+
+    #[test]
+    fn the_copy_flash_names_what_was_copied() {
+        assert_eq!(
+            copied_message("cargo test"),
+            "Copied \u{201c}cargo test\u{201d}"
+        );
+        assert_eq!(copied_message("one\ntwo\nthree"), "Copied 3 lines");
+        assert_eq!(copied_message(&"x".repeat(41)), "Copied 41 characters");
+        assert_eq!(
+            copied_message("  padded  "),
+            "Copied \u{201c}padded\u{201d}"
+        );
     }
 
     #[gpui::test]

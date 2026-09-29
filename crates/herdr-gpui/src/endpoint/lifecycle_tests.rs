@@ -273,6 +273,16 @@ fn first_focus_claims_geometry_without_a_window_resize(cx: &mut gpui::TestAppCon
     });
 }
 
+/// Holding Option sends a left drag to the application instead of selecting.
+/// Other buttons ignore it, and it is never forwarded itself.
+const FORWARD: gpui::Modifiers = gpui::Modifiers {
+    control: false,
+    alt: true,
+    shift: false,
+    platform: false,
+    function: false,
+};
+
 fn prepare_mouse(view: &mut HerdrWindow, endpoint: Endpoint) {
     view.endpoints.truncate(1);
     view.endpoints.push(endpoint);
@@ -1294,6 +1304,12 @@ fn connected_mouse_focused_pane_preserves_drag_target_and_immediate_text(
                 prepare_mouse(view, endpoint);
                 assert!(view.terminal_mouse_down(
                     &MouseDownEvent {
+                        // Option forwards a left drag, as a mouse-reporting app expects.
+                        modifiers: if button == MouseButton::Left {
+                            FORWARD
+                        } else {
+                            Default::default()
+                        },
                         position: mouse_position(view, 3.5, 4.5),
                         button,
                         ..Default::default()
@@ -1345,6 +1361,61 @@ fn connected_mouse_focused_pane_preserves_drag_target_and_immediate_text(
 }
 
 #[gpui::test]
+fn connected_mouse_plain_click_reaches_the_app_and_a_plain_drag_selects_instead(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (fixture, cx) = cx.add_window_view(|window, cx| {
+        Fixture(cx.new(|cx| crate::sidebar::layout_tests::fixture_window(window, cx)))
+    });
+    let view = fixture.update(cx, |fixture, _| fixture.0.clone());
+    let (endpoint, mut server) = connected_endpoint("ssh:mouse");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            prepare_mouse(view, endpoint);
+            let at = mouse_position(view, 3.5, 4.5);
+            let press = MouseDownEvent {
+                position: at,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            };
+            let release = |position| MouseUpEvent {
+                position,
+                button: MouseButton::Left,
+                ..Default::default()
+            };
+            // A click: held on press, which the render path follows with a
+            // selection start, then sent whole on release.
+            assert!(!view.terminal_mouse_down(&press, window, cx));
+            assert!(view.held_click.is_some());
+            view.begin_selection(at, 1, cx);
+            assert!(view.release_left(&release(at), cx));
+            // A drag: it selects and copies, and the application hears nothing.
+            assert!(!view.terminal_mouse_down(&press, window, cx));
+            view.begin_selection(at, 1, cx);
+            let end = mouse_position(view, 12.5, 4.5);
+            assert!(view.extend_selection(end, cx));
+            assert!(view.release_left(&release(end), cx));
+            assert!(view.held_click.is_none() && view.selection.is_none());
+            view.send(ClientPaneInputEvent::TextCommit("after".into()), cx);
+        });
+    });
+    for event in [
+        mouse_event(ClientMouseKind::Down(ClientMouseButton::Left), 2, 3),
+        mouse_event(ClientMouseKind::Up(ClientMouseButton::Left), 2, 3),
+        ClientPaneInputEvent::TextCommit("after".into()),
+    ] {
+        assert_eq!(
+            server.receive(),
+            ClientMessage::ClientShellPaneInput {
+                pane_id: "w1:p1".into(),
+                events: vec![event],
+            }
+        );
+    }
+}
+
+#[gpui::test]
 fn connected_mouse_inactive_pane_receives_first_click_before_focus_fence(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1359,6 +1430,8 @@ fn connected_mouse_inactive_pane_receives_first_click_before_focus_fence(
             let position = mouse_position(view, 43.5, 4.5);
             assert!(view.terminal_mouse_down(
                 &MouseDownEvent {
+                    // Option forwards a left drag, as a mouse-reporting app expects.
+                    modifiers: FORWARD,
                     position,
                     button: MouseButton::Left,
                     ..Default::default()
@@ -1461,6 +1534,8 @@ fn connected_mouse_popup_uses_popup_relative_pixel_coordinates_and_blocks_covere
             let outside = mouse_position(view, 3.5, 4.5);
             assert!(!view.terminal_mouse_down(
                 &MouseDownEvent {
+                    // Option forwards a left drag, as a mouse-reporting app expects.
+                    modifiers: FORWARD,
                     position: outside,
                     button: MouseButton::Left,
                     ..Default::default()
@@ -1487,7 +1562,11 @@ fn connected_mouse_popup_uses_popup_relative_pixel_coordinates_and_blocks_covere
                 &MouseDownEvent {
                     position: mouse_position(view, 32.5, 10.5),
                     button: MouseButton::Left,
-                    modifiers,
+                    // Option forwards the drag; it is not forwarded itself.
+                    modifiers: gpui::Modifiers {
+                        alt: true,
+                        ..modifiers
+                    },
                     ..Default::default()
                 },
                 window,
@@ -1546,7 +1625,8 @@ fn connected_mouse_popup_uses_popup_relative_pixel_coordinates_and_blocks_covere
                         width_px: 400,
                         height_px: 400
                     }),
-                    modifiers: 14,
+                    // Control and Command; Option only routed the drag here.
+                    modifiers: 10,
                     lines: 1,
                 }],
             }
@@ -1583,6 +1663,8 @@ fn connected_mouse_cancels_stale_gestures_before_drag_or_release(cx: &mut gpui::
                     let position = mouse_position(view, 3.5, 4.5);
                     assert!(view.terminal_mouse_down(
                         &MouseDownEvent {
+                            // Option forwards a left drag, as a mouse-reporting app expects.
+                            modifiers: FORWARD,
                             position,
                             button: MouseButton::Left,
                             ..Default::default()
@@ -1716,6 +1798,8 @@ fn connected_mouse_external_drag_cleans_up_once_without_forwarding_synthetic_inp
                     if pressed {
                         assert!(view.terminal_mouse_down(
                             &MouseDownEvent {
+                                // Option forwards a left drag, as a mouse-reporting app expects.
+                                modifiers: FORWARD,
                                 position,
                                 button: MouseButton::Left,
                                 ..Default::default()
@@ -1756,6 +1840,8 @@ fn connected_mouse_external_drag_cleans_up_once_without_forwarding_synthetic_inp
                     assert!(view.terminal_mouse.is_none());
                     assert!(view.terminal_mouse_down(
                         &MouseDownEvent {
+                            // Option forwards a left drag, as a mouse-reporting app expects.
+                            modifiers: FORWARD,
                             position,
                             button: MouseButton::Left,
                             ..Default::default()
@@ -1830,6 +1916,8 @@ fn connected_mouse_deactivation_releases_last_sent_position_once_without_focusin
                 view.active = true;
                 assert!(view.terminal_mouse_down(
                     &MouseDownEvent {
+                        // Option forwards a left drag, as a mouse-reporting app expects.
+                        modifiers: FORWARD,
                         position: mouse_position(view, offset + 3.5, 4.5),
                         button: MouseButton::Left,
                         ..Default::default()

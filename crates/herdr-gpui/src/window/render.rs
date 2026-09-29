@@ -171,9 +171,13 @@ impl Render for HerdrWindow {
                     {
                         return;
                     }
-                    this.pressed_terminal_link = this
-                        .terminal_link_at(event.position)
-                        .map(|url| (url, event.position));
+                    // A mouse-reporting application owns plain clicks on its
+                    // links; the link modifier still opens them here.
+                    this.pressed_terminal_link = (!this
+                        .reports_mouse_at(event.position, event.modifiers))
+                    .then(|| this.terminal_link_at(event.position))
+                    .flatten()
+                    .map(|url| (url, event.position));
                     if this.menu.page.is_some() {
                         return;
                     }
@@ -269,7 +273,7 @@ impl Render for HerdrWindow {
                                         || this.terminal_mouse_up(event, cx)
                                         || (event.button == MouseButton::Left
                                             && !cx.has_active_drag()
-                                            && this.release_selection(cx))
+                                            && this.release_left(event, cx))
                                     {
                                         cx.stop_propagation();
                                     }
@@ -381,21 +385,31 @@ impl Render for HerdrWindow {
                                 .min_w_0()
                                 .flex()
                                 .items_center()
-                                .gap(px(8.))
-                                .px(px(12.))
-                                .py(px(6.))
-                                .rounded(px(crate::config::corners::CONTROL))
+                                .gap(px(10.))
+                                .px(px(16.))
+                                .py(px(9.))
+                                .rounded(px(crate::config::corners::PANEL))
                                 .border_1()
                                 .border_color(rgb(flash.accent(&self.theme)))
                                 .bg(rgb(self.theme.surface))
+                                .shadow_lg()
                                 .text_color(rgb(self.theme.foreground))
-                                .child(
-                                    div()
-                                        .size(px(6.))
+                                .text_size(px(self.config.ui.size + 1.))
+                                .font_weight(FontWeight::MEDIUM)
+                                // A check for something done, so the flash reads
+                                // before its words do; a dot for anything else.
+                                .child(match flash.tone {
+                                    crate::window::flash::Tone::Success => div()
+                                        .flex_none()
+                                        .text_color(rgb(flash.accent(&self.theme)))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child("\u{2713}"),
+                                    crate::window::flash::Tone::Warning => div()
+                                        .size(px(7.))
                                         .flex_none()
                                         .rounded_full()
                                         .bg(rgb(flash.accent(&self.theme))),
-                                )
+                                })
                                 .child(div().truncate().child(flash.text.clone())),
                         ),
                 )

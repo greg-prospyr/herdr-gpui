@@ -1,5 +1,8 @@
-//! Application mouse gestures take precedence over local selection and links.
-//! Shift keeps a gesture local; a forwarded drag stays with its pressed target.
+//! Application mouse gestures take precedence over links, but not over
+//! selection: in a mouse-reporting pane a left press is held until release,
+//! so a drag selects and copies here while a click still reaches the
+//! application. Option sends the whole drag to the application instead;
+//! Shift keeps any gesture local. A forwarded drag stays with its target.
 
 use super::HerdrWindow;
 use crate::{
@@ -20,6 +23,17 @@ use serde_json::json;
 pub(crate) struct Gesture {
     hit: WheelTarget,
     button: MouseButton,
+    boot: String,
+    epoch: u64,
+    generation: u64,
+}
+
+/// A left press in a mouse-reporting pane, held back until release shows
+/// whether it was a click, which goes to the application, or a drag, which
+/// selected cells here instead.
+pub(crate) struct HeldClick {
+    hit: WheelTarget,
+    modifiers: Modifiers,
     boot: String,
     epoch: u64,
     generation: u64,
@@ -48,6 +62,19 @@ pub(crate) struct SplitDrag {
     held: bool,
     want: Option<f32>,
     sent: Option<f32>,
+}
+
+/// Option routes a left drag to the application rather than selecting, so it
+/// is this client's key and not part of what the application receives.
+fn forwarded(button: MouseButton, modifiers: Modifiers) -> Modifiers {
+    if button == MouseButton::Left {
+        Modifiers {
+            alt: false,
+            ..modifiers
+        }
+    } else {
+        modifiers
+    }
 }
 
 fn button(button: MouseButton) -> Option<ClientMouseButton> {
@@ -155,18 +182,41 @@ impl HerdrWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         self.cancel_terminal_mouse(cx);
+        self.held_click = None;
         let Some(hit) = self.terminal_mouse_at(event.position).filter(|hit| {
             hit.mouse_reporting && !self.link_modifier_held(event.position, event.modifiers)
         }) else {
             return false;
         };
+        // A plain left press may be the start of a selection. The caller
+        // starts one; release decides whether the application gets a click.
+        // Double and triple clicks select a word or a line here.
+        if event.button == MouseButton::Left && !event.modifiers.alt {
+            self.held_click = (event.click_count == 1)
+                .then(|| {
+                    Some(HeldClick {
+                        hit,
+                        modifiers: event.modifiers,
+                        boot: self.live.snapshot.as_ref()?.boot_id.clone(),
+                        epoch: self.selection_epoch,
+                        generation: self.selected_generation,
+                    })
+                })
+                .flatten();
+            return false;
+        }
         self.pressed_terminal_link = None;
         self.selection = None;
         window.focus(&self.focus, cx);
         cx.stop_propagation();
         if let Some(button) = button(event.button)
             && !cx.has_active_drag()
-            && self.send_mouse(&hit, ClientMouseKind::Down(button), event.modifiers, cx)
+            && self.send_mouse(
+                &hit,
+                ClientMouseKind::Down(button),
+                forwarded(event.button, event.modifiers),
+                cx,
+            )
             && let Some(snapshot) = &self.live.snapshot
         {
             self.terminal_mouse = Some(Gesture {
@@ -216,6 +266,7 @@ impl HerdrWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         if cx.has_active_drag() {
+            self.held_click = None;
             self.cancel_terminal_mouse(cx);
             self.selection = None;
             self.pressed_terminal_link = None;
@@ -229,7 +280,7 @@ impl HerdrWindow {
             let hit = self.gesture_hit(gesture, event.position);
             let kind = button(gesture.button).map(ClientMouseKind::Drag);
             if let (Some(hit), Some(kind)) = (hit, kind) {
-                if self.send_mouse(&hit, kind, event.modifiers, cx)
+                if self.send_mouse(&hit, kind, forwarded(gesture.button, event.modifiers), cx)
                     && let Some(gesture) = &mut self.terminal_mouse
                 {
                     gesture.hit = hit;
@@ -284,7 +335,12 @@ impl HerdrWindow {
         self.terminal_mouse = None;
         if let Some(hit) = hit
             && let Some(button) = button(event.button)
-            && self.send_mouse(&hit, ClientMouseKind::Up(button), event.modifiers, cx)
+            && self.send_mouse(
+                &hit,
+                ClientMouseKind::Up(button),
+                forwarded(event.button, event.modifiers),
+                cx,
+            )
             && let InputTarget::Pane(id) = &hit.target
         {
             // Finish targeted input before navigation fences the surface. This
@@ -292,6 +348,48 @@ impl HerdrWindow {
             self.focus_clicked_pane(id, cx);
         }
         true
+    }
+
+    /// Ends a left press: a selection it made is copied; a held press that
+    /// selected nothing was a click, which goes to the application now as a
+    /// press and release. Returns whether the release was handled.
+    pub(crate) fn release_left(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) -> bool {
+        let held = self.held_click.take();
+        let selected = self.release_selection(cx);
+        let Some(held) = held.filter(|_| !selected) else {
+            return selected;
+        };
+        let current = held.epoch == self.selection_epoch
+            && held.generation == self.selected_generation
+            && self
+                .live
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.boot_id == held.boot);
+        if current
+            && self.send_mouse(
+                &held.hit,
+                ClientMouseKind::Down(ClientMouseButton::Left),
+                held.modifiers,
+                cx,
+            )
+        {
+            self.send_mouse(
+                &held.hit,
+                ClientMouseKind::Up(ClientMouseButton::Left),
+                event.modifiers,
+                cx,
+            );
+        }
+        true
+    }
+
+    /// Whether a press here, with these keys, is the application's rather
+    /// than a link's.
+    pub(crate) fn reports_mouse_at(&self, position: Point<Pixels>, modifiers: Modifiers) -> bool {
+        self.terminal_mouse_at(position)
+            .is_some_and(|hit| hit.mouse_reporting)
+            && !self.link_modifier_held(position, modifiers)
     }
 
     pub(crate) fn focus_clicked_pane(&mut self, id: &str, cx: &mut Context<Self>) {

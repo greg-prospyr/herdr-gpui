@@ -7,7 +7,7 @@ mod clipboard;
 mod commands;
 mod drop_hover;
 mod file_drop;
-mod flash;
+pub(crate) mod flash;
 pub(crate) use flash::Flash;
 mod image_source;
 mod images;
@@ -105,6 +105,8 @@ pub(crate) struct HerdrWindow {
     /// The terminal cells the pointer is choosing. A release copies them and
     /// clears this, so a highlight only ever belongs to a drag in progress.
     pub(crate) selection: Option<Selection>,
+    /// A left press a mouse-reporting application may still be owed.
+    pub(crate) held_click: Option<mouse::HeldClick>,
     /// The brief message over the terminal, and when it stops showing.
     pub(crate) flash: Option<(Flash, std::time::Instant)>,
     /// The frame on screen, kept across the gap between two projections.
@@ -415,6 +417,7 @@ impl HerdrWindow {
             file_transfer: None,
             drop_hover: Default::default(),
             selection: None,
+            held_click: None,
             flash: None,
             presentation: Default::default(),
             painter: Default::default(),

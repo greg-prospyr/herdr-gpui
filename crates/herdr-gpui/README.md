@@ -549,15 +549,26 @@ native-frame appearance also remains unverified by these macOS tests.
 
 ## Terminal Selection And Copy
 
-Mouse-aware applications receive clicks, button releases, drags, and pointer
-motion. Hold Shift to select/copy locally instead, or Shift-right-click for the
-GUI pane menu. In applications without mouse reporting, selection and the pane
-menu work without Shift. A forwarded drag stays in the pane or popup where it
-started, including when the pointer moves outside it.
-
 Drag across the terminal to select cells; releasing the button copies them, drops
-the highlight, and shows the `copied to clipboard` flash described under
-[Configuration](#configuration). Selection is client-local: it reads the surface
+the highlight, and shows a flash saying what was copied. A selection of nothing
+but blank cells copies nothing and shows no flash, so a stray drag never replaces
+what the clipboard holds. The flash names the text itself when it is one short
+line, otherwise how many lines or characters. The flash's placement
+and whether it appears follow the clipboard toast settings described under
+[Configuration](#configuration).
+
+This holds in mouse-aware applications too, such as coding agents, whose own
+selection copies through a terminal clipboard request that this client never
+honors. There a left press is held until release: a drag selects and copies
+here and the application receives nothing, while a click that selects nothing
+reaches the application as a press and release. Double and triple clicks select
+a word or a line here. Hold Option to send a left drag to the application
+instead; Option then only routes the gesture and is not forwarded with it, so
+an application cannot receive Option with a left click. Other buttons, the
+wheel, and pointer motion still reach the application, and Shift keeps any
+gesture local, including Shift-right-click for the GUI pane menu. A forwarded
+drag stays in the pane or popup where it started, including when the pointer
+moves outside it. Selection is client-local: it reads the surface
 the client already has, sends nothing to the daemon, and asks it for nothing.
 
 A selection stays inside the pane it started in, and a drag that leaves the pane
