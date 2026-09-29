@@ -1173,6 +1173,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         pending_images: Vec::new(),
         pending_input: Default::default(),
         file_transfer: None,
+        drop_hover: Default::default(),
         presentation: Default::default(),
         painter: Default::default(),
         marked: String::new(),

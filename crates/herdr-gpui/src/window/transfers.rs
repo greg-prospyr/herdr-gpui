@@ -39,20 +39,22 @@ impl Drop for FileTransfer {
     }
 }
 
-fn transfer_progress(sent: u64, total: u64) -> (f32, String) {
-    let size = |bytes: u64| {
-        let mut value = bytes as f64;
-        let mut unit = "B";
-        for next in ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"] {
-            if value < 1024. {
-                break;
-            }
-            value /= 1024.;
-            unit = next;
+/// A byte count in binary units with at most one decimal, such as `2.4 MiB`.
+pub(super) fn byte_size(bytes: u64) -> String {
+    let mut value = bytes as f64;
+    let mut unit = "B";
+    for next in ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"] {
+        if value < 1024. {
+            break;
         }
-        let number = format!("{value:.1}");
-        format!("{} {unit}", number.trim_end_matches(".0"))
-    };
+        value /= 1024.;
+        unit = next;
+    }
+    let number = format!("{value:.1}");
+    format!("{} {unit}", number.trim_end_matches(".0"))
+}
+
+fn transfer_progress(sent: u64, total: u64) -> (f32, String) {
     let fraction = if total == 0 {
         0.
     } else {
@@ -60,7 +62,12 @@ fn transfer_progress(sent: u64, total: u64) -> (f32, String) {
     };
     (
         fraction,
-        format!("{} / {} ({:.0}%)", size(sent), size(total), fraction * 100.),
+        format!(
+            "{} / {} ({:.0}%)",
+            byte_size(sent),
+            byte_size(total),
+            fraction * 100.
+        ),
     )
 }
 

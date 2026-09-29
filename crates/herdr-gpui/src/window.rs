@@ -5,6 +5,7 @@
 
 mod clipboard;
 mod commands;
+mod drop_hover;
 mod file_drop;
 mod flash;
 pub(crate) use flash::Flash;
@@ -99,6 +100,8 @@ pub(crate) struct HerdrWindow {
     pub(crate) pending_images: Vec<images::PendingImage>,
     pub(crate) pending_input: pending_input::PendingInput,
     pub(crate) file_transfer: Option<transfers::FileTransfer>,
+    /// What an external file drag over the terminal would do, framed and previewed.
+    pub(crate) drop_hover: drop_hover::DropHover,
     /// The terminal cells the pointer is choosing. A release copies them and
     /// clears this, so a highlight only ever belongs to a drag in progress.
     pub(crate) selection: Option<Selection>,
@@ -410,6 +413,7 @@ impl HerdrWindow {
             pending_images: Vec::new(),
             pending_input: Default::default(),
             file_transfer: None,
+            drop_hover: Default::default(),
             selection: None,
             flash: None,
             presentation: Default::default(),

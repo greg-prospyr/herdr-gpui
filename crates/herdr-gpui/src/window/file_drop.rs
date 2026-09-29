@@ -5,7 +5,7 @@ use super::HerdrWindow;
 use crate::{
     Error, Result,
     connection::ConnectionBridge,
-    terminal::{InputTarget, wheel_target},
+    terminal::{InputTarget, WheelTarget, wheel_target},
 };
 use gpui::{Context, ExternalPaths, Pixels, Point, Window};
 use herdr_client::protocol::ClientPaneInputEvent;
@@ -27,20 +27,27 @@ impl HerdrWindow {
             return;
         };
         cx.stop_propagation();
+        self.end_drop_hover(cx);
         if paths.paths().is_empty() {
             return;
         }
+        let action = DropAction::choose(self.accepts_remote_images(), paths.paths());
         let result = quote_paths(paths.paths()).and_then(|text| {
-            if self.accepts_remote_images()
-                && let [path] = paths.paths()
-                && let Some(source) = super::image_source::from_path(path)
-            {
-                self.start_remote_image(target.clone(), source, Some(text), cx);
-                return Ok(());
-            }
-            if self.accepts_remote_images() {
-                self.start_file_transfer(target.clone(), paths.paths().to_vec(), cx);
-                return Ok(());
+            match action {
+                DropAction::SendImage => {
+                    let source = paths
+                        .paths()
+                        .first()
+                        .and_then(|path| super::image_source::from_path(path))
+                        .ok_or(Error::ImageFormat)?;
+                    self.start_remote_image(target.clone(), source, Some(text), cx);
+                    return Ok(());
+                }
+                DropAction::CopyFiles => {
+                    self.start_file_transfer(target.clone(), paths.paths().to_vec(), cx);
+                    return Ok(());
+                }
+                DropAction::PastePaths => {}
             }
             let endpoint = &self.endpoints[self.selected_endpoint];
             let handle = endpoint
@@ -67,6 +74,12 @@ impl HerdrWindow {
     }
 
     fn file_drop_target(&self, position: Point<Pixels>) -> Option<InputTarget> {
+        self.file_drop_hit(position).map(|hit| hit.target)
+    }
+
+    /// Where a drop at `position` lands, with that target's cell area relative
+    /// to the terminal's paint origin, which the hover highlight also draws.
+    pub(super) fn file_drop_hit(&self, position: Point<Pixels>) -> Option<WheelTarget> {
         if self.menu.page.is_some()
             || !self.live.status.is_connected()
             || !self.input_ready()
@@ -81,7 +94,29 @@ impl HerdrWindow {
             self.cell_width,
             self.config.terminal.line_height(),
         )
-        .map(|hit| hit.target)
+    }
+}
+
+/// What dropping files does. The drop and its hover card both ask this, so
+/// the card never promises something the drop would not do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DropAction {
+    /// The pane can read these paths itself, so they are pasted quoted.
+    PastePaths,
+    /// One image goes through the daemon's image bridge to the remote host.
+    SendImage,
+    /// Files are copied to the remote host, then their remote paths pasted.
+    CopyFiles,
+}
+
+impl DropAction {
+    /// `remote` is whether the selected endpoint takes bridged images now.
+    pub(super) fn choose(remote: bool, paths: &[PathBuf]) -> Self {
+        match paths {
+            _ if !remote => Self::PastePaths,
+            [path] if super::image_source::from_path(path).is_some() => Self::SendImage,
+            _ => Self::CopyFiles,
+        }
     }
 }
 
@@ -196,6 +231,24 @@ mod tests {
     }
 
     #[test]
+    fn a_drop_bridges_only_one_recognized_image_to_a_remote_host() {
+        use DropAction::*;
+        let image = PathBuf::from("/tmp/shot.png");
+        let text = PathBuf::from("/tmp/notes.txt");
+        let relative = PathBuf::from("shot.png");
+        for (remote, paths, expected) in [
+            (false, vec![image.clone()], PastePaths),
+            (false, vec![text.clone(), image.clone()], PastePaths),
+            (true, vec![image.clone()], SendImage),
+            (true, vec![text.clone()], CopyFiles),
+            (true, vec![relative], CopyFiles),
+            (true, vec![image.clone(), image], CopyFiles),
+        ] {
+            assert_eq!(DropAction::choose(remote, &paths), expected, "{paths:?}");
+        }
+    }
+
+    #[test]
     fn empty_drop_is_no_text_but_empty_path_is_invalid() {
         assert_eq!(quote_paths(&[]).unwrap(), "");
         assert!(matches!(
@@ -297,9 +350,8 @@ mod tests {
     fn external_drop_dispatches_with_submit_position_and_empty_payload_is_inert(
         cx: &mut gpui::TestAppContext,
     ) {
-        // GPUI 0.2.2 exposes only Default for ExternalPaths construction; its
-        // populated constructor is platform-private. Exercise actual dispatch
-        // with an empty payload, and populated formatting separately above.
+        // An empty payload keeps this drop from sending input; populated drags
+        // are exercised by the hover test, and path formatting separately above.
         let (fixture, cx) = cx.add_window_view(|window, cx| DropFixture {
             view: cx.new(|cx| {
                 let mut view = fixture_window(window, cx);
@@ -330,6 +382,86 @@ mod tests {
             cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
             Some("unchanged".into())
         );
+    }
+
+    struct HoverFixture {
+        view: gpui::Entity<HerdrWindow>,
+    }
+
+    // Forwards GPUI's real external-drag moves without rendering the window
+    // itself, so layout never replaces the synthetic geometry from `prepare`.
+    impl Render for HoverFixture {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            gpui::div().size_full().on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                    this.view
+                        .update(cx, |view, cx| view.file_drag_move(event, window, cx));
+                },
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn a_file_drag_frames_the_drop_target_previews_images_and_ends_on_exit(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let image = directory.path().join("shot.png");
+        image::RgbImage::new(64, 48).save(&image).unwrap();
+        let (fixture, cx) = cx.add_window_view(|window, cx| HoverFixture {
+            view: cx.new(|cx| {
+                let mut view = fixture_window(window, cx);
+                prepare(&mut view);
+                view
+            }),
+        });
+        let view = fixture.read_with(cx, |fixture, _| fixture.view.clone());
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let line = view.read_with(cx, |view, _| view.config.terminal.line_height());
+        let at = |column: f32, row: f32| point(px(100. + column * 10.), px(50. + row * line));
+        let pane = |id: &str| Some(InputTarget::Pane(id.into()));
+
+        cx.simulate_event(gpui::FileDropEvent::Entered {
+            position: at(42., 2.),
+            paths: ExternalPaths(vec![image].into()),
+        });
+        view.read_with(cx, |view, _| {
+            assert!(view.drop_hover.dragging());
+            assert_eq!(view.drop_hover.target().cloned(), pane("pane-40"));
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.drop_hover.previewed()));
+
+        cx.simulate_event(gpui::FileDropEvent::Pending {
+            position: at(2., 2.),
+        });
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.drop_hover.target().cloned(), pane("pane-0"));
+            // Moving between targets keeps the files and their preview.
+            assert!(view.drop_hover.previewed());
+        });
+        // The border between panes is chrome, where nothing drops.
+        cx.simulate_event(gpui::FileDropEvent::Pending {
+            position: at(40., 2.),
+        });
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.drop_hover.target(), None);
+            assert!(view.drop_hover.dragging());
+        });
+
+        cx.simulate_event(gpui::FileDropEvent::Exited);
+        view.update(cx, |view, cx| {
+            assert!(!cx.has_active_drag());
+            // Render is where an exit is noticed: GPUI only redraws for it.
+            let now = std::time::Instant::now();
+            assert!(view.settle_drop_hover(cx.has_active_drag(), now));
+            assert!(!view.drop_hover.dragging());
+            assert!(!view.settle_drop_hover(false, now + crate::motion::LEAVE));
+            assert!(view.local_error.is_none());
+        });
     }
 
     #[gpui::test]
