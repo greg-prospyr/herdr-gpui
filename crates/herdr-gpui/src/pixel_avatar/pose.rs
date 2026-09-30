@@ -1,37 +1,42 @@
-//! How a moon stands at a moment in time, and when that next changes.
+//! How a buddy stands at a moment in time, and when that next changes.
 //!
 //! Status comes from the daemon's snapshot; this only remembers when this
 //! client saw it change, to play a short smooth "moment": a shake when a
-//! space blocks, a ripple of light when it finishes. After that each status
-//! holds a phase: a still crescent at rest, a sweeping terminator at work, a
-//! pulsing blood moon when it needs you, a full moon when done. Only work
-//! and blocking move, on a clock shared by every moon, so they share redraws.
+//! space blocks, a hop when it finishes. After that each status loops at a
+//! pixel-art cadence on a clock shared by every buddy, so they share
+//! redraws: bouncing at work, trembling when it needs you, twinkling when
+//! done, and a blink now and then at rest.
 
-use super::moon::{self, Light};
+use super::buddy::Look;
 use herdr_client::protocol::AgentStatus;
 use std::time::{Duration, Instant};
 
 const SHAKE: Duration = Duration::from_millis(900);
-const RIPPLE: Duration = Duration::from_millis(900);
-/// A blood moon brightens and dims twice a second.
-const PULSE: u128 = 500;
+const HOP: Duration = Duration::from_millis(700);
+/// A working buddy bounces at eight frames a second.
+const BOUNCE: u128 = 125;
+const TREMBLE: u128 = 250;
+const TWINKLE: u128 = 600;
+/// Blinks come every few seconds, in one of three slots so that neighbours
+/// do not all blink at once, yet redraws stay shared.
+const BLINK_PERIOD: u128 = 5_100;
+const BLINK: u128 = 150;
 
-/// Offsets are in moon pixels and may be fractional during a moment.
+/// Offsets are in buddy pixels and may be fractional during a moment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Pose {
-    pub light: Light,
+    pub look: Look,
     pub dx: f32,
-    /// How far a finished moon's ripple has spread, 0 to 1, while it plays.
-    pub ripple: Option<f32>,
+    pub dy: f32,
 }
 
 impl Pose {
-    /// A moon three-quarters lit: how pickers show a style.
+    /// Smiling at rest: how pickers show a style.
     pub(crate) fn still() -> Self {
         Self {
-            light: Light::Phase(moon::PHASES / 3),
+            look: Look::Idle { blink: false },
             dx: 0.,
-            ripple: None,
+            dy: 0.,
         }
     }
 }
@@ -62,14 +67,24 @@ pub(crate) struct Motion {
     /// When this client saw the status change; `None` for the status a space
     /// already had when first seen, which plays no moment.
     changed: Option<Instant>,
+    /// Which blink slot this buddy uses.
+    slot: u8,
 }
 
 impl Motion {
-    pub(crate) fn new(status: AgentStatus) -> Self {
+    pub(crate) fn new(key: &str, status: AgentStatus) -> Self {
+        let slot = key.bytes().fold(0u32, |hash, byte| {
+            hash.wrapping_mul(31).wrapping_add(u32::from(byte))
+        }) % 3;
         Self {
             status,
             changed: None,
+            slot: slot as u8,
         }
+    }
+
+    fn blink_phase(&self, tick: u128) -> u128 {
+        (tick + u128::from(self.slot) * BLINK_PERIOD / 3) % BLINK_PERIOD
     }
 
     /// Records the daemon's latest status for this space.
@@ -88,7 +103,7 @@ impl Motion {
     fn moment(&self, now: Instant) -> Option<f32> {
         let length = match self.status {
             AgentStatus::Blocked => SHAKE,
-            AgentStatus::Done => RIPPLE,
+            AgentStatus::Done => HOP,
             _ => return None,
         };
         let elapsed = self.since_change(now)?;
@@ -98,25 +113,29 @@ impl Motion {
     /// The pose at `now`, with loops timed from the shared `clock` start.
     pub(crate) fn pose(&self, now: Instant, clock: Instant) -> Pose {
         let tick = now.saturating_duration_since(clock).as_millis();
-        let light = match self.status {
-            AgentStatus::Working => Light::Phase(moon::phase_at(tick).0),
-            AgentStatus::Blocked => Light::Blood {
-                bright: (tick / PULSE).is_multiple_of(2),
+        let look = match self.status {
+            AgentStatus::Working => Look::Working {
+                frame: (tick / BOUNCE % 4) as u8,
             },
-            AgentStatus::Done => Light::Full,
-            AgentStatus::Idle | AgentStatus::Unknown => Light::Crescent,
+            AgentStatus::Blocked => Look::Blocked {
+                tremble: !(tick / TREMBLE).is_multiple_of(2),
+            },
+            AgentStatus::Done => Look::Done {
+                twinkle: !(tick / TWINKLE).is_multiple_of(2),
+            },
+            AgentStatus::Idle | AgentStatus::Unknown => Look::Idle {
+                blink: self.blink_phase(tick) >= BLINK_PERIOD - BLINK,
+            },
         };
         let moment = self.moment(now);
-        Pose {
-            light,
-            dx: match (self.status, moment) {
-                (AgentStatus::Blocked, Some(k)) => {
-                    (k * std::f32::consts::TAU * 6.).sin() * 1.6 * (1. - k)
-                }
-                _ => 0.,
-            },
-            ripple: moment.filter(|_| self.status == AgentStatus::Done),
-        }
+        let (dx, dy) = match (self.status, moment) {
+            (AgentStatus::Blocked, Some(k)) => {
+                ((k * std::f32::consts::TAU * 6.).sin() * 1.6 * (1. - k), 0.)
+            }
+            (AgentStatus::Done, Some(k)) => (0., -5. * (std::f32::consts::PI * k).sin()),
+            _ => (0., 0.),
+        };
+        Pose { look, dx, dy }
     }
 
     /// When `pose` next returns something different.
@@ -125,11 +144,19 @@ impl Motion {
             return Wake::Frame;
         }
         let tick = now.saturating_duration_since(clock).as_millis();
+        let until = |step: u128| step - tick % step;
         let millis = match self.status {
-            AgentStatus::Working => moon::phase_at(tick).1,
-            AgentStatus::Blocked => PULSE - tick % PULSE,
-            // A crescent and a full moon hold still: no redraws at all.
-            AgentStatus::Done | AgentStatus::Idle | AgentStatus::Unknown => return Wake::Never,
+            AgentStatus::Working => until(BOUNCE),
+            AgentStatus::Blocked => until(TREMBLE),
+            AgentStatus::Done => until(TWINKLE),
+            AgentStatus::Idle | AgentStatus::Unknown => {
+                let phase = self.blink_phase(tick);
+                if phase >= BLINK_PERIOD - BLINK {
+                    BLINK_PERIOD - phase
+                } else {
+                    BLINK_PERIOD - BLINK - phase
+                }
+            }
         };
         Wake::After(Duration::from_millis(millis.max(1) as u64))
     }
@@ -137,8 +164,6 @@ impl Motion {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use super::*;
 
     fn at(clock: Instant, millis: u64) -> Instant {
@@ -146,39 +171,46 @@ mod tests {
     }
 
     #[test]
-    fn resting_and_finished_moons_hold_still() {
+    fn working_bounces_through_four_frames_on_the_shared_clock() {
         let clock = Instant::now();
-        for (status, light) in [
-            (AgentStatus::Idle, Light::Crescent),
-            (AgentStatus::Unknown, Light::Crescent),
-            (AgentStatus::Done, Light::Full),
-        ] {
-            let motion = Motion::new(status);
-            assert_eq!(motion.pose(at(clock, 1234), clock).light, light);
-            assert_eq!(
-                motion.wake(at(clock, 1234), clock),
-                Wake::Never,
-                "{status:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn working_sweeps_the_terminator_on_the_shared_clock() {
-        let clock = Instant::now();
-        let motion = Motion::new(AgentStatus::Working);
-        assert_eq!(motion.pose(clock, clock).light, Light::Phase(0));
-        assert_eq!(motion.pose(at(clock, 250), clock).light, Light::Phase(1));
+        let a = Motion::new("a", AgentStatus::Working);
+        let frames: Vec<_> = (0..4)
+            .map(|i| a.pose(at(clock, i * 125 + 5), clock).look)
+            .collect();
         assert_eq!(
-            motion.wake(at(clock, 250), clock),
-            Wake::After(Duration::from_millis(230))
+            frames,
+            (0..4)
+                .map(|frame| Look::Working { frame })
+                .collect::<Vec<_>>()
+        );
+        let b = Motion::new("b", AgentStatus::Working);
+        assert_eq!(a.pose(at(clock, 600), clock), b.pose(at(clock, 600), clock));
+        assert_eq!(
+            a.wake(at(clock, 130), clock),
+            Wake::After(Duration::from_millis(120))
         );
     }
 
     #[test]
-    fn blocking_shakes_then_the_blood_moon_pulses() {
+    fn idle_buddies_blink_briefly_in_staggered_slots() {
         let clock = Instant::now();
-        let mut motion = Motion::new(AgentStatus::Working);
+        let slots: std::collections::HashSet<_> = (0..30)
+            .map(|i| Motion::new(&format!("w{i}"), AgentStatus::Idle).slot)
+            .collect();
+        assert_eq!(slots.len(), 3);
+        let motion = Motion::new("w1", AgentStatus::Idle);
+        let blinking = (0..BLINK_PERIOD as u64)
+            .step_by(10)
+            .filter(|&t| motion.pose(at(clock, t), clock).look == Look::Idle { blink: true })
+            .count();
+        assert!((14..=16).contains(&blinking), "{blinking}");
+        assert!(matches!(motion.wake(clock, clock), Wake::After(_)));
+    }
+
+    #[test]
+    fn blocking_shakes_then_trembles_and_finishing_hops_then_twinkles() {
+        let clock = Instant::now();
+        let mut motion = Motion::new("p", AgentStatus::Working);
         motion.observe(AgentStatus::Blocked, clock);
         assert_eq!(motion.wake(clock, clock), Wake::Frame);
         let shaking = (1..9).map(|i| motion.pose(at(clock, i * 20), clock).dx.abs());
@@ -186,37 +218,27 @@ mod tests {
         let after = at(clock, 1_000);
         assert_eq!(motion.pose(after, clock).dx, 0.);
         assert_eq!(
-            motion.pose(after, clock).light,
-            Light::Blood { bright: true }
-        );
-        assert_eq!(
-            motion.pose(at(clock, 1_500), clock).light,
-            Light::Blood { bright: false }
-        );
-        assert_eq!(
             motion.wake(after, clock),
-            Wake::After(Duration::from_millis(500))
+            Wake::After(Duration::from_millis(250))
         );
-    }
-
-    #[test]
-    fn finishing_ripples_once_and_the_first_status_plays_nothing() {
-        let clock = Instant::now();
-        let mut motion = Motion::new(AgentStatus::Working);
         motion.observe(AgentStatus::Done, clock);
-        let ripple = motion.pose(at(clock, 450), clock).ripple.unwrap();
-        assert!(ripple > 0.4 && ripple < 0.6, "{ripple}");
-        assert_eq!(motion.pose(at(clock, 950), clock).ripple, None);
-        assert!(
-            Motion::new(AgentStatus::Done)
-                .pose(clock, clock)
-                .ripple
-                .is_none()
-        );
+        let apex = motion.pose(at(clock, 350), clock);
+        assert!(apex.dy < -4.9, "{apex:?}");
+        let settled = motion.pose(at(clock, 800), clock);
+        assert_eq!(settled.dy, 0.);
+        assert!(matches!(settled.look, Look::Done { .. }));
         assert_eq!(
             motion.since_change(at(clock, 60_000)),
             Some(Duration::from_secs(60))
         );
+    }
+
+    #[test]
+    fn the_first_status_plays_no_moment() {
+        let clock = Instant::now();
+        for status in [AgentStatus::Blocked, AgentStatus::Done] {
+            assert_ne!(Motion::new("p", status).wake(clock, clock), Wake::Frame);
+        }
     }
 
     #[test]

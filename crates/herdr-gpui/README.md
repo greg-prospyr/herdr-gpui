@@ -1111,15 +1111,17 @@ Windows setup) nothing is saved and the window says so.
   another: dragged down it lands after that row, dragged up before it. Unpin
   in the same menu returns it to the ranking. Pins, like the rest of attention
   order, are this app's own (`space-pins.json`, at most 64).
-  In attention order each space shows a small pixel moon in place of the
-  repository owner's icon, lit with dithered shading. Its phase is its daemon
-  status: a thin crescent at rest, a terminator sweeping across the face while
-  it works, a pulsing blood moon when it needs you, and a full moon with a halo
-  when it is done. It shakes when a space blocks and sends out a ring of light
-  when one finishes. Resting and full moons never redraw; working and blocked
-  ones step a few times a second, and each pose is rendered once into an image
-  the window reuses. Change avatar in a space's right-click menu picks one of
-  six crater patterns and ten tints, or returns to its default; the
+  In attention order each space shows a pixel buddy in place of the
+  repository owner's icon: one of six shapes in one of ten colours, lit as a
+  solid body with cool shadows, a glossy highlight, a rim light, and an
+  outline, with a face that follows its daemon status. At rest it smiles and
+  blinks now and then; at work it bounces with squash and stretch, glancing
+  about with its tongue out; when it needs you it looks worried, sweats, and
+  raises a speech bubble with a red "!"; when it is done it beams, with
+  twinkling stars. It shakes when a space blocks and hops when one finishes.
+  Buddies share one clock, so their redraws coincide, and each look is
+  rendered once into an image the window reuses. Change avatar in a space's
+  right-click menu picks a shape and a colour, or returns to its default; the
   choice is stored by this app only (`space-avatars.json`, at most 512
   spaces), since the daemon has nowhere to keep it. Rename in the same menu
   renames the space through the daemon, for every client. The window paints

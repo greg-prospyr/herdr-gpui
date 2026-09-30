@@ -15,7 +15,7 @@ const TILE_SPRITE: f32 = 32.;
 const SWATCH: f32 = 20.;
 const PREVIEW: f32 = 64.;
 
-/// A moon painted still, `side` pixels square.
+/// A buddy painted still, `side` pixels square.
 fn still(images: &Rc<RefCell<Images>>, style: AvatarStyle, side: f32) -> impl IntoElement {
     let images = images.clone();
     canvas(
@@ -120,9 +120,9 @@ impl HerdrWindow {
                             ),
                     ),
             )
-            .child(label("Craters"))
+            .child(label("Shape"))
             .child(div().flex().flex_wrap().gap(px(4.)).children(shapes))
-            .child(label("Tint"))
+            .child(label("Color"))
             .child(div().flex().flex_wrap().gap(px(4.)).children(hues))
             .child(
                 div()

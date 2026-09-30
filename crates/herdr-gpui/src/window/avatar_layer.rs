@@ -44,7 +44,7 @@ pub(crate) struct AvatarLayer {
     observed: HashMap<String, (String, u64)>,
     /// Each endpoint's focused space last observed; a change is a touch.
     focused: HashMap<String, String>,
-    /// Rendered moons, shared with the paint closure and the picker.
+    /// Rendered buddies, shared with the paint closure and the picker.
     images: Rc<RefCell<Images>>,
     /// Loops run on this clock, so every working avatar steps at once.
     clock: Instant,
@@ -67,7 +67,7 @@ impl AvatarLayer {
         }
     }
 
-    /// The rendered moons, for anything else that paints one.
+    /// The rendered buddies, for anything else that paints one.
     pub(crate) fn images(&self) -> Rc<RefCell<Images>> {
         self.images.clone()
     }
@@ -91,7 +91,7 @@ impl AvatarLayer {
             motions
                 .entry(key.clone())
                 .and_modify(|motion| motion.observe(status, now))
-                .or_insert_with(|| Motion::new(status));
+                .or_insert_with(|| Motion::new(id, status));
             seen.insert(key);
         }
         motions.retain(|key, _| key.endpoint != endpoint || seen.contains(key));
@@ -357,14 +357,11 @@ mod tests {
         );
         assert_eq!(layer.wake(now), Wake::Never, "no slots, nothing to draw");
         layer.slots.borrow_mut().push(slot(key("local", "idle")));
-        assert_eq!(
-            layer.wake(now),
-            Wake::Never,
-            "a resting crescent holds still"
-        );
+        // A resting buddy only wakes to blink, seconds apart.
+        assert!(matches!(layer.wake(now), Wake::After(delay) if delay > Duration::from_secs(1)));
         layer.slots.borrow_mut().push(slot(key("local", "gone")));
         assert!(
-            matches!(layer.wake(now), Wake::After(delay) if delay <= Duration::from_millis(240))
+            matches!(layer.wake(now), Wake::After(delay) if delay <= Duration::from_millis(125))
         );
         // A status change plays a moment, which draws every frame.
         let later = now + Duration::from_secs(2);
