@@ -16,8 +16,7 @@ pub(super) const MENU_WIDTH: f32 = 280.;
 /// origin of the button that opened it. The device picker and the session list
 /// clamp at the same place, so neither grows over the terminal.
 pub(super) fn list_height(anchor_y: Pixels) -> Pixels {
-    let chrome = crate::titlebar::HEIGHT
-        + crate::worktree_banner::reserved(env!("HERDR_BUILD_WORKTREE") == "1");
+    let chrome = crate::titlebar::HEIGHT;
     (anchor_y - px(chrome + MENU_GAP + super::MENU_MARGIN + 12.))
         .max(px(48.))
         .min(px(420.))

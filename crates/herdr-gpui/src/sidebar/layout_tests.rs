@@ -3256,8 +3256,7 @@ fn the_sidebar_menu_stays_clear_of_the_window_chrome(cx: &mut gpui::TestAppConte
         SidebarFixture(view)
     });
     let view = cx.update(|_, cx| fixture.read(cx).0.clone());
-    let chrome = px(crate::titlebar::HEIGHT
-        + crate::worktree_banner::reserved(env!("HERDR_BUILD_WORKTREE") == "1"));
+    let chrome = px(crate::titlebar::HEIGHT);
     cx.simulate_resize(size(px(800.), px(600.)));
     cx.run_until_parked();
     // An anchor near the top leaves no room above it, one near the footer

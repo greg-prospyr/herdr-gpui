@@ -12,7 +12,6 @@ use crate::{
     fonts::StyledFont,
     state::ConnectionStatus,
     terminal::*,
-    worktree_banner,
 };
 use gpui::{prelude::*, *};
 use herdr_client::ConnectOptions;
@@ -536,11 +535,6 @@ impl Render for HerdrWindow {
             .text_font(&self.config.ui)
             .text_size(px(self.config.ui.size))
             .child(self.render_titlebar(cx))
-            .children(worktree_banner::render(
-                env!("HERDR_BUILD_WORKTREE") == "1",
-                env!("HERDR_BUILD_BRANCH"),
-                env!("HERDR_BUILD_PR"),
-            ))
             .child(
                 div()
                     .debug_selector(|| "window-body".into())

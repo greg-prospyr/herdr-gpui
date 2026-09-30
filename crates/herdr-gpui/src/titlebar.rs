@@ -373,15 +373,7 @@ mod tests {
                 cx.debug_bounds("titlebar-avatar").unwrap(),
                 Bounds::new(point(px(width - 34.), px(3.)), size(px(28.), px(28.)))
             );
-            let banner_height = if env!("HERDR_BUILD_WORKTREE") == "1" {
-                22.
-            } else {
-                0.
-            };
-            assert_eq!(
-                cx.debug_bounds("window-body").unwrap().top(),
-                px(34. + banner_height)
-            );
+            assert_eq!(cx.debug_bounds("window-body").unwrap().top(), px(34.));
         }
         let bounds = cx.debug_bounds("titlebar-avatar").unwrap();
         cx.simulate_event(MouseDownEvent {
@@ -768,12 +760,7 @@ mod native_chrome_tests {
                     Bounds::new(point(px(80.), px(0.)), size(px(width - 120.), px(34.)))
                 );
                 let body = cx.debug_bounds("window-body").unwrap();
-                let banner_height = if env!("HERDR_BUILD_WORKTREE") == "1" {
-                    22.
-                } else {
-                    0.
-                };
-                assert_eq!(body.top(), px(34. + banner_height));
+                assert_eq!(body.top(), px(34.));
                 assert_eq!(body.size.width, px(width));
                 assert!(body.bottom() <= px(height));
             }

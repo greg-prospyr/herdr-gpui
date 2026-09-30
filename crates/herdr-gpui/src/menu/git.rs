@@ -812,8 +812,7 @@ mod tests {
                 let _ = window.draw(cx);
             });
             let panel = cx.debug_bounds("menu-panel").unwrap();
-            let chrome = crate::titlebar::HEIGHT
-                + crate::worktree_banner::reserved(env!("HERDR_BUILD_WORKTREE") == "1");
+            let chrome = crate::titlebar::HEIGHT;
             assert!(panel.top() >= px(chrome + 6.));
             assert!(panel.bottom() <= px(height - 12.));
             assert!(panel.left() >= px(12.) && panel.right() <= px(width - 12.));
