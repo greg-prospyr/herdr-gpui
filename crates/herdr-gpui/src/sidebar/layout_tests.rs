@@ -711,6 +711,79 @@ fn pinned_spaces_sit_above_the_ranked_list_and_drag_into_a_new_order(
     });
 }
 
+#[test]
+fn search_matches_every_word_in_the_name_branch_or_machine() {
+    use super::workspaces::{filter_entries, space_matches};
+    let workspaces = snapshot(7).workspaces;
+    let herdr = &workspaces[0];
+    for query in [
+        "",
+        "herdr",
+        "HERDR main",
+        "main",
+        "omarchy",
+        "herdr omarchy",
+    ] {
+        assert!(space_matches(query, herdr, "Omarchy"), "{query:?}");
+    }
+    for query in ["gpui", "herdr develop", "local"] {
+        assert!(!space_matches(query, herdr, "Omarchy"), "{query:?}");
+    }
+    // A matching worktree brings its repository, and the group stays whole.
+    let entries = super::workspaces::visible_workspace_entries(&workspaces, &Default::default());
+    let kept = filter_entries(entries.clone(), &workspaces, "Local", "sidebar-child-with");
+    let ids: Vec<_> = kept
+        .iter()
+        .map(|entry| workspaces[entry.0].workspace_id.as_str())
+        .collect();
+    assert_eq!(ids, ["w3", "w4", "w5"]);
+    assert_eq!(
+        filter_entries(entries.clone(), &workspaces, "Local", "  "),
+        entries
+    );
+    assert!(filter_entries(entries, &workspaces, "Local", "nothing-like-it").is_empty());
+}
+
+#[gpui::test]
+fn the_search_field_filters_spaces_as_you_type_and_escape_clears_it(cx: &mut gpui::TestAppContext) {
+    use crate::preferences::SpaceSort;
+    let (fixture, cx) = cx.add_window_view(|window, cx| {
+        crate::bind_keys(cx);
+        let view = cx.new(|cx| {
+            let mut view = fixture_window(window, cx);
+            view.space_sort = SpaceSort::Attention;
+            view.live.snapshot = Some(Arc::new(snapshot(3)));
+            view
+        });
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        SidebarFixture(view)
+    });
+    let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+    let listed = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| full_draw(window, cx).clear(cx));
+        view.read_with(cx, |view, _| view.space_avatars.slot_ids())
+    };
+    assert_eq!(listed(cx).len(), 3);
+    let button = cx.debug_bounds("spaces-search").unwrap();
+    cx.simulate_click(button.center(), Modifiers::none());
+    assert!(view.read_with(cx, |view, _| view.space_search.is_some()));
+    cx.simulate_input("gpui sidebar");
+    assert_eq!(listed(cx), ["w1"]);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.space_first_match.borrow().clone()),
+        Some((crate::endpoint::LOCAL.to_owned(), "w1".to_owned()))
+    );
+    cx.simulate_input(" nothing");
+    assert!(listed(cx).is_empty());
+    assert!(cx.debug_bounds("spaces-no-match").is_some());
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |view, _| {
+        assert!(view.space_search.is_none());
+        assert!(view.space_query.is_empty());
+    });
+    assert_eq!(listed(cx).len(), 3);
+}
+
 #[gpui::test]
 fn sidebar_allocates_text_width(cx: &mut gpui::TestAppContext) {
     let (fixture, cx) = cx.add_window_view(|window, cx| {
@@ -1448,6 +1521,9 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         space_heads: Default::default(),
         space_rows: Default::default(),
         spaces_hovered: false,
+        space_query: String::new(),
+        space_search: None,
+        space_first_match: Default::default(),
         pinned: Vec::new(),
         _space_pin_changes: cx.observe_global::<crate::spaces::Pins>(|this, cx| {
             this.pinned = crate::spaces::Pins::all(cx);

@@ -144,7 +144,12 @@ impl HerdrWindow {
             } else {
                 &endpoint.collapsed_repos
             };
-            let entries = visible_workspace_entries(&snapshot.workspaces, collapsed);
+            let entries = filter_entries(
+                visible_workspace_entries(&snapshot.workspaces, collapsed),
+                &snapshot.workspaces,
+                &endpoint.label,
+                &self.space_query,
+            );
             for unit in units(&entries) {
                 let members = &entries[unit];
                 let spaces = || members.iter().map(|entry| &snapshot.workspaces[entry.0]);
@@ -232,4 +237,83 @@ pub(super) struct RankedSpaces {
         Option<crate::spaces::SpaceKey>,
     )>,
     pub pinned: usize,
+}
+
+/// Whether a space answers `query`: every whitespace-separated word, ignoring
+/// case, appears in its name, its branch, or the machine it is on.
+pub(super) fn space_matches(query: &str, workspace: &ClientShellWorkspace, machine: &str) -> bool {
+    let haystack = [
+        workspace.label.as_str(),
+        workspace.branch.as_deref().unwrap_or(""),
+        machine,
+    ]
+    .join("\n")
+    .to_lowercase();
+    query
+        .split_whitespace()
+        .all(|word| haystack.contains(&word.to_lowercase()))
+}
+
+/// Keeps only the units, a parent with its indented rows, where some row
+/// answers `query`, so a matching worktree brings its repository along.
+pub(super) fn filter_entries(
+    entries: Vec<crate::spaces::Entry>,
+    workspaces: &[ClientShellWorkspace],
+    machine: &str,
+    query: &str,
+) -> Vec<crate::spaces::Entry> {
+    if query.trim().is_empty() {
+        return entries;
+    }
+    crate::spaces::units(&entries)
+        .into_iter()
+        .filter(|unit| {
+            entries[unit.clone()]
+                .iter()
+                .any(|entry| space_matches(query, &workspaces[entry.0], machine))
+        })
+        .flat_map(|unit| entries[unit].to_vec())
+        .collect()
+}
+
+impl HerdrWindow {
+    /// Opens the Spaces search field and puts the cursor in it.
+    pub(super) fn open_space_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((input, _)) = &self.space_search {
+            window.focus(&input.read(cx).focus.clone(), cx);
+            return;
+        }
+        let input = cx.new(crate::search_input::SearchInput::new);
+        input.update(cx, |input, cx| {
+            input.set_appearance(self.config.sidebar.clone(), self.theme.clone(), cx);
+            input.set_placeholder("Search spaces", cx);
+            window.focus(&input.focus, cx);
+        });
+        let edits = cx.subscribe(
+            &input,
+            |this, input, _: &crate::search_input::Changed, cx| {
+                this.space_query = input.read(cx).text().to_owned();
+                cx.notify();
+            },
+        );
+        self.space_search = Some((input, edits));
+        cx.notify();
+    }
+
+    /// Clears the search, closes the field, and hands keys back to the terminal.
+    pub(super) fn close_space_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.space_search = None;
+        self.space_query.clear();
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Goes to the first space the search lists, and closes the search.
+    pub(super) fn open_first_space_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let first = self.space_first_match.borrow().clone();
+        self.close_space_search(window, cx);
+        if let Some((endpoint, id)) = first {
+            self.navigate_endpoint(&endpoint, crate::NavigationTarget::Workspace(&id), cx);
+        }
+    }
 }

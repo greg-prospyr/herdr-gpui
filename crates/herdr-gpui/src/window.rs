@@ -179,6 +179,12 @@ pub(crate) struct HerdrWindow {
     pub(crate) space_rows:
         std::cell::RefCell<std::collections::HashMap<crate::spaces::SpaceKey, usize>>,
     pub(crate) spaces_hovered: bool,
+    /// What the Spaces search field holds; empty shows every space.
+    pub(crate) space_query: String,
+    /// The search field while it is open, and its edits.
+    pub(crate) space_search: Option<(Entity<crate::search_input::SearchInput>, Subscription)>,
+    /// The first space the last render listed under a search, for Enter.
+    pub(crate) space_first_match: std::cell::RefCell<Option<(String, String)>>,
     /// The pinned spaces, mirrored for code that has no app context.
     pub(crate) pinned: Vec<crate::spaces::SpaceKey>,
     pub(crate) _space_pin_changes: Subscription,
@@ -490,6 +496,9 @@ impl HerdrWindow {
             space_heads: Default::default(),
             space_rows: Default::default(),
             spaces_hovered: false,
+            space_query: String::new(),
+            space_search: None,
+            space_first_match: Default::default(),
             pinned: crate::spaces::Pins::all(cx),
             // A pin set in another window moves this one's rows too.
             _space_pin_changes: cx.observe_global::<crate::spaces::Pins>(|this, cx| {

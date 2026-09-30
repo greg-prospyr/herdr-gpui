@@ -1067,6 +1067,12 @@ Windows setup) nothing is saved and the window says so.
 - Agents panel header ends with its sort, `grouped` or `priority`, which a
   click flips; an active agent view names itself there instead. Client-local
   and persisted beside the sidebar width, as in the terminal client.
+- The magnifier in the Spaces header opens a search field under it that
+  filters the list as you type, in either order: every word must appear in a
+  space's name, its branch, or its machine, ignoring case, and a matching
+  worktree keeps its repository and group around it. Enter goes to the first
+  space listed; Escape, or the magnifier again, clears the search and returns
+  the keyboard to the terminal.
 - The Spaces header ends with its order, `manual` or `attention`, which a click
   flips; it is client-local and saved beside the sidebar width. Manual keeps the
   daemon's order, which dragging a row changes for every client. Attention

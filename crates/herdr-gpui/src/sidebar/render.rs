@@ -13,7 +13,7 @@ use super::{
     reorder::{self, Plan},
     row::{RowIcon, RowLift, RowTree, removing_dot},
     sidebar_width, sorted_agents, visible_workspace_entries,
-    workspaces::{spaces_sort, workspace_badge, workspace_label},
+    workspaces::{filter_entries, spaces_sort, workspace_badge, workspace_label},
 };
 use crate::{
     Command, HerdrWindow, NavigationTarget,
@@ -86,6 +86,8 @@ impl HerdrWindow {
         // Attention order ranks spaces by what needs you; see `crate::spaces`.
         let attention = self.space_sort == crate::preferences::SpaceSort::Attention;
         self.clear_avatar_slots();
+        let searching = !self.space_query.trim().is_empty();
+        *self.space_first_match.borrow_mut() = None;
         // Each row's child index in this list, for next frame's heights.
         let mut space_layout = std::collections::HashMap::new();
         // In attention order every machine's spaces form one ranked list,
@@ -252,10 +254,15 @@ impl HerdrWindow {
             let items: Vec<((usize, crate::spaces::Entry), Option<SpaceKey>)> = if attention {
                 merged.take().map(|merged| merged.rows).unwrap_or_default()
             } else {
-                visible_workspace_entries(&snapshot.workspaces, collapsed_repos)
-                    .into_iter()
-                    .map(|entry| ((endpoint_index, entry), None))
-                    .collect()
+                filter_entries(
+                    visible_workspace_entries(&snapshot.workspaces, collapsed_repos),
+                    &snapshot.workspaces,
+                    &endpoint.label,
+                    &self.space_query,
+                )
+                .into_iter()
+                .map(|entry| ((endpoint_index, entry), None))
+                .collect()
             };
             let drag = self
                 .workspace_drag
@@ -322,6 +329,10 @@ impl HerdrWindow {
                     &endpoint.collapsed_repos
                 };
                 let workspace = &snapshot.workspaces[index];
+                if searching && self.space_first_match.borrow().is_none() {
+                    *self.space_first_match.borrow_mut() =
+                        Some((endpoint.id.clone(), workspace.workspace_id.clone()));
+                }
                 if selected && workspace.focused {
                     highlighted[0] = Some(space_rows);
                 }
@@ -604,6 +615,16 @@ impl HerdrWindow {
             }
         }
         *self.space_rows.borrow_mut() = space_layout;
+        if searching && self.space_first_match.borrow().is_none() {
+            spaces = spaces.child(
+                div()
+                    .debug_selector(|| "spaces-no-match".into())
+                    .px(px(content_x))
+                    .py(px(6.))
+                    .text_color(rgb(theme.muted))
+                    .child(label_text("No spaces match")),
+            );
+        }
         if sliding {
             window.request_animation_frame();
         }
@@ -672,10 +693,16 @@ impl HerdrWindow {
                     .min_h_0()
                     .overflow_hidden()
                     .child(
-                        header("spaces", font, theme, look)
-                            .justify_between()
-                            .child(spaces_sort(self, cx)),
+                        header("spaces", font, theme, look).justify_between().child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(self.spaces_search_button(cx))
+                                .child(spaces_sort(self, cx)),
+                        ),
                     )
+                    .children(self.spaces_search_field(cx))
                     .child(spaces)
                     .child(
                         div()
@@ -870,6 +897,62 @@ impl HerdrWindow {
                 .absolute()
                 .size_full(),
             )
+    }
+}
+
+impl HerdrWindow {
+    fn spaces_search_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (muted, fore) = (self.theme.muted, self.theme.foreground);
+        let open = self.space_search.is_some();
+        div()
+            .id("spaces-search")
+            .debug_selector(|| "spaces-search".into())
+            .flex_none()
+            .cursor_pointer()
+            .child(
+                svg()
+                    .path("icons/search.svg")
+                    .size(px(12.))
+                    .text_color(rgb(if open { fore } else { muted })),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                if this.space_search.is_some() {
+                    this.close_space_search(window, cx);
+                } else {
+                    this.open_space_search(window, cx);
+                }
+            }))
+    }
+
+    /// The field under the Spaces header while search is open. Escape clears
+    /// and closes it; Enter goes to the first space it lists.
+    fn spaces_search_field(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let (input, _) = self.space_search.as_ref()?;
+        let look = layout::for_mode(self.config.layout.mode);
+        Some(
+            div()
+                .debug_selector(|| "spaces-search-field".into())
+                .flex_none()
+                .px(px(look.content_x()))
+                .pb(px(6.))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "escape" => this.close_space_search(window, cx),
+                        "enter" => this.open_first_space_match(window, cx),
+                        _ => return,
+                    }
+                    cx.stop_propagation();
+                }))
+                .child(
+                    div()
+                        .rounded(px(crate::config::corners::CONTROL))
+                        .bg(rgb(self.theme.active))
+                        .px(px(6.))
+                        .py(px(2.))
+                        .child(input.clone()),
+                ),
+        )
     }
 }
 
