@@ -10,6 +10,7 @@ mod commands;
 mod drop_hover;
 mod file_drop;
 pub(crate) mod flash;
+mod jev;
 pub(crate) use flash::Flash;
 mod image_source;
 mod images;
@@ -185,6 +186,10 @@ pub(crate) struct HerdrWindow {
     pub(crate) space_search: Option<(Entity<crate::search_input::SearchInput>, Subscription)>,
     /// The first space the last render listed under a search, for Enter.
     pub(crate) space_first_match: std::cell::RefCell<Option<(String, String)>>,
+    /// Jev's judgment of how much each space needs you, 0 to 1, and the
+    /// client that asks for it; `None` without an AI Gateway key.
+    pub(crate) jev_scores: std::collections::HashMap<crate::spaces::SpaceKey, f32>,
+    pub(crate) jev: Option<jev::Jev>,
     /// The pinned spaces, mirrored for code that has no app context.
     pub(crate) pinned: Vec<crate::spaces::SpaceKey>,
     pub(crate) _space_pin_changes: Subscription,
@@ -496,6 +501,8 @@ impl HerdrWindow {
             space_heads: Default::default(),
             space_rows: Default::default(),
             spaces_hovered: false,
+            jev_scores: Default::default(),
+            jev: jev::Jev::from_environment(),
             space_query: String::new(),
             space_search: None,
             space_first_match: Default::default(),

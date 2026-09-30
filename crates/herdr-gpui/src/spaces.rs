@@ -5,11 +5,13 @@
 //! client shares and dragging changes, is untouched, and status still comes
 //! from the daemon's snapshot.
 
+mod jev;
 mod order;
 mod pins;
 mod recency;
 mod slides;
 
+pub(crate) use jev::{Candidate, MAX_SPACES as JEV_MAX_SPACES, judge};
 pub(crate) use order::{Entry, Unit, rank, units, urgency};
 pub(crate) use pins::Pins;
 pub(crate) use recency::{Recency, now_millis};

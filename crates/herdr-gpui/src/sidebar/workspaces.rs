@@ -115,7 +115,16 @@ pub(super) fn spaces_sort(window: &HerdrWindow, cx: &mut Context<HerdrWindow>) -
             this.save_chrome();
             cx.notify();
         }))
-        .child(super::label_text(&window.space_sort.to_string()))
+        // A star says Jev's judgment is shaping the order.
+        .child(super::label_text(
+            &if window.space_sort == crate::preferences::SpaceSort::Attention
+                && !window.jev_scores.is_empty()
+            {
+                format!("{} \u{2726}", window.space_sort)
+            } else {
+                window.space_sort.to_string()
+            },
+        ))
 }
 
 impl HerdrWindow {
@@ -174,6 +183,13 @@ impl HerdrWindow {
                         })
                         .max()
                         .unwrap_or(0),
+                    attention: spaces()
+                        .filter_map(|space| {
+                            self.jev_scores
+                                .get(&SpaceKey::new(&endpoint.id, &space.workspace_id))
+                                .copied()
+                        })
+                        .reduce(f32::max),
                 });
                 rows.push(
                     members
@@ -201,7 +217,7 @@ impl HerdrWindow {
         let held = self
             .spaces_hovered
             .then(|| self.space_heads.borrow().clone());
-        let order: Vec<usize> = rank(&candidates, held.as_deref())
+        let order: Vec<usize> = rank(&candidates, held.as_deref(), crate::spaces::now_millis())
             .into_iter()
             .map(|index| loose[index])
             .collect();

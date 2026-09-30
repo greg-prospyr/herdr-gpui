@@ -1090,6 +1090,22 @@ Windows setup) nothing is saved and the window says so.
   While the pointer is over the list the order holds, so no row moves out from
   under a click; leaving it lets the list settle, and moved rows glide to their
   new places.
+  With `AI_GATEWAY_API_KEY` in the app's environment, attention order also asks
+  Jev, TypeSafe's judgment model, through Vercel AI Gateway how much each space
+  needs you right now, and a star after `attention` shows it has answered. The
+  request carries only each visible space's name, machine, branch, daemon
+  status, minutes in that status and since you last focused it, and up to three
+  agent task titles taken from terminal titles; never terminal contents or
+  prompts. It is sent when a status or task changes, at most every 30 seconds,
+  one at a time, on a background thread with a 15-second limit. Blocked and done
+  spaces still lead as the daemon says; within each tier Jev's score weighs 70
+  percent against recency, which halves in weight every hour, so an important
+  space left alone can rise above a trivial one touched a moment ago. Without
+  the key, or when a request fails, the order is as above and nothing is sent;
+  failures are logged. Apps opened from the Dock or Finder do not see a shell's
+  variables, so launch from a terminal to use it. The opt-in
+  `jev_live_judges_a_blocked_space_above_an_idle_one` test checks the service
+  with made-up spaces.
   Pin to top in a space's right-click menu keeps it in a pinned group above
   the ranked list, in the order you arrange by dragging one pinned row onto
   another: dragged down it lands after that row, dragged up before it. Unpin

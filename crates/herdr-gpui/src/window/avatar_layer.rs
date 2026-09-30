@@ -111,6 +111,11 @@ impl AvatarLayer {
         true
     }
 
+    /// How long ago this client saw `key`'s status change, if it did.
+    pub(crate) fn since_change(&self, key: &SpaceKey, now: Instant) -> Option<std::time::Duration> {
+        self.motions.borrow().get(key)?.since_change(now)
+    }
+
     /// Whether `endpoint`'s focused space differs from the last one seen.
     fn focus_moved(&mut self, endpoint: &str, focused: &str) -> bool {
         if self
@@ -230,6 +235,7 @@ impl HerdrWindow {
         }
         self.space_avatars.signal.read(cx);
         self.schedule_avatar_wake(now, window, cx);
+        self.consider_jev(now, cx);
         let layer = &self.space_avatars;
         let slots = layer.slots.clone();
         let clock = layer.clock;

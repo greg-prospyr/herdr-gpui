@@ -369,6 +369,12 @@ pub enum Error {
     InvalidSpaceRecency,
     #[error("Invalid saved pinned spaces")]
     InvalidSpacePins,
+    #[error("Jev could not be reached through AI Gateway.")]
+    JevNetwork(#[source] ureq::Error),
+    #[error("AI Gateway answered Jev's request with HTTP {0}.")]
+    JevStatus(u16),
+    #[error("Jev's answer was missing a score.")]
+    JevAnswer,
     #[error("Herdr GPUI is not running, or its control socket {} is unreachable: {source}", path.display())]
     ControlUnavailable {
         path: PathBuf,

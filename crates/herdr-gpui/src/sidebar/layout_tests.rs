@@ -785,6 +785,46 @@ fn the_search_field_filters_spaces_as_you_type_and_escape_clears_it(cx: &mut gpu
 }
 
 #[gpui::test]
+fn jev_scores_reorder_spaces_within_a_tier_and_mark_the_header(cx: &mut gpui::TestAppContext) {
+    use crate::{preferences::SpaceSort, spaces::SpaceKey};
+    use herdr_client::protocol::AgentStatus;
+    let (fixture, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            let mut view = fixture_window(window, cx);
+            view.space_sort = SpaceSort::Attention;
+            let mut snapshot = snapshot(3);
+            for space in &mut snapshot.workspaces {
+                space.agent_status = AgentStatus::Idle;
+                space.focused = false;
+            }
+            snapshot.workspaces[0].agent_status = AgentStatus::Blocked;
+            view.live.snapshot = Some(Arc::new(snapshot));
+            view
+        });
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        SidebarFixture(view)
+    });
+    let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+    let order = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| full_draw(window, cx).clear(cx));
+        view.read_with(cx, |view, _| view.space_avatars.slot_ids())
+    };
+    assert_eq!(order(cx), ["w0", "w1", "w2"]);
+    let sort = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.space_sort.to_string())
+    };
+    assert_eq!(sort(cx), "attention");
+    view.update(cx, |view, cx| {
+        let key = |id: &str| SpaceKey::new(crate::endpoint::LOCAL, id);
+        view.jev_scores = [(key("w0"), 0.0), (key("w1"), 0.1), (key("w2"), 0.9)].into();
+        cx.notify();
+    });
+    // The blocked space stays first; Jev lifts w2 over w1 below it.
+    assert_eq!(order(cx), ["w0", "w2", "w1"]);
+    assert!(view.read_with(cx, |view, _| !view.jev_scores.is_empty()));
+}
+
+#[gpui::test]
 fn sidebar_allocates_text_width(cx: &mut gpui::TestAppContext) {
     let (fixture, cx) = cx.add_window_view(|window, cx| {
         crate::bind_keys(cx);
@@ -1521,6 +1561,8 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         space_heads: Default::default(),
         space_rows: Default::default(),
         spaces_hovered: false,
+        jev_scores: Default::default(),
+        jev: None,
         space_query: String::new(),
         space_search: None,
         space_first_match: Default::default(),
