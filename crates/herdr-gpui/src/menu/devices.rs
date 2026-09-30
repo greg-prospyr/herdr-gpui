@@ -7,10 +7,7 @@ pub(crate) use host_menu::HostMenu;
 use super::{Page, colors};
 use crate::{Command, HerdrWindow, NavigationTarget, search_input::SearchInput};
 use gpui::{prelude::*, *};
-use herdr_client::{
-    ConnectTarget, HostProbe, Method,
-    protocol::{ClientKeyCode, ClientKeyKind, ClientPaneInputEvent},
-};
+use herdr_client::{ConnectTarget, HostProbe, Method, protocol::ClientPaneInputEvent};
 
 pub(super) const MENU_GAP: f32 = 12.;
 pub(super) const MENU_WIDTH: f32 = 280.;
@@ -1101,17 +1098,7 @@ impl HerdrWindow {
 }
 
 fn enter() -> ClientPaneInputEvent {
-    ClientPaneInputEvent::Key {
-        code: ClientKeyCode::Enter,
-        modifiers: 0,
-        kind: ClientKeyKind::Press,
-        repeat_count: 1,
-        shifted_codepoint: None,
-        generated_text: None,
-        tracks_release: false,
-        physical_key_id: None,
-        windows_record: None,
-    }
+    crate::input::enter_key()
 }
 
 #[cfg(test)]

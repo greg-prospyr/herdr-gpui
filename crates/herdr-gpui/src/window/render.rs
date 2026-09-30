@@ -93,6 +93,8 @@ impl Render for HerdrWindow {
             .map(|(slot, _)| *slot);
         let terminal_gap = terminal_slot.map_or(sidebar_gap, slot_gap);
         let drop_hover = self.render_drop_hover(terminal_gap, window, cx);
+        self.forget_gone_chats();
+        let chat_layer = self.render_chat_layer(surface.as_deref(), terminal_gap, cx);
         let terminal = div()
             .id("terminal")
             .debug_selector(|| "terminal".into())
@@ -416,6 +418,16 @@ impl Render for HerdrWindow {
                 )
             })
             .children(drop_hover);
+        // Chats are the terminal's siblings, not its children: keys typed in
+        // a chat never pass through the terminal's key handler.
+        let terminal = div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(terminal)
+            .children(chat_layer);
         // A focus handle belongs to one element: the terminal when drawn,
         // otherwise the group in use.
         let keyboard = terminal_slot

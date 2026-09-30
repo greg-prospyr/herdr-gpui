@@ -19,9 +19,7 @@ use crate::{
     window::Flash,
 };
 use gpui::{prelude::*, *};
-use herdr_client::protocol::{
-    AgentStatus, ClientKeyCode, ClientKeyKind, ClientPaneInputEvent, ClientShellSnapshot,
-};
+use herdr_client::protocol::{AgentStatus, ClientPaneInputEvent, ClientShellSnapshot};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -246,17 +244,7 @@ fn save_screenshots_in(
 }
 
 fn enter() -> ClientPaneInputEvent {
-    ClientPaneInputEvent::Key {
-        code: ClientKeyCode::Enter,
-        modifiers: 0,
-        kind: ClientKeyKind::Press,
-        repeat_count: 1,
-        shifted_codepoint: None,
-        generated_text: None,
-        tracks_release: false,
-        physical_key_id: None,
-        windows_record: None,
-    }
+    crate::input::enter_key()
 }
 
 impl HerdrWindow {

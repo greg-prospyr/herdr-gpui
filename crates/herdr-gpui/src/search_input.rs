@@ -24,6 +24,8 @@ pub struct SearchInput {
     bounds: Option<Bounds<Pixels>>,
     scroll: Pixels,
     selecting: bool,
+    /// Drawn without its own frame, inside one its owner draws.
+    bare: bool,
 }
 
 // Internal offsets are UTF-8 boundaries; only the platform input API uses UTF-16.
@@ -129,7 +131,14 @@ impl SearchInput {
             bounds: None,
             scroll: px(0.),
             selecting: false,
+            bare: false,
         }
+    }
+
+    /// Draws the field without its own border, padding, or background.
+    pub fn set_bare(&mut self, bare: bool, cx: &mut Context<Self>) {
+        self.bare = bare;
+        cx.notify();
     }
 
     pub fn text(&self) -> &str {
@@ -375,12 +384,15 @@ impl Render for SearchInput {
         div()
             .debug_selector(|| "theme-search".into())
             .w_full()
-            .px_2()
-            .py_1()
-            .rounded(px(crate::config::corners::CONTROL))
-            .border_1()
-            .border_color(rgb(self.theme.active))
-            .bg(rgb(self.theme.background))
+            .when(!self.bare, |field| {
+                field
+                    .px_2()
+                    .py_1()
+                    .rounded(px(crate::config::corners::CONTROL))
+                    .border_1()
+                    .border_color(rgb(self.theme.active))
+                    .bg(rgb(self.theme.background))
+            })
             .text_color(rgb(self.theme.foreground))
             .text_font(&self.font)
             .text_size(px(self.font.size))

@@ -143,6 +143,21 @@ impl EntityInputHandler for HerdrWindow {
 /// The terminal's platform input handler. A terminal repeats a held key, so
 /// it opts out of macOS press-and-hold, which would otherwise swallow the
 /// repeats and open the accent picker. Menu text fields keep the picker.
+/// A plain Enter press, as a pane receives it when the user presses Return.
+pub(crate) fn enter_key() -> ClientPaneInputEvent {
+    ClientPaneInputEvent::Key {
+        code: herdr_client::protocol::ClientKeyCode::Enter,
+        modifiers: 0,
+        kind: herdr_client::protocol::ClientKeyKind::Press,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: false,
+        physical_key_id: None,
+        windows_record: None,
+    }
+}
+
 pub(crate) struct TerminalInputHandler {
     inner: ElementInputHandler<HerdrWindow>,
     press_and_hold: bool,

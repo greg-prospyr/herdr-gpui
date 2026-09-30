@@ -5,6 +5,7 @@
 
 mod avatar_layer;
 pub(crate) use avatar_layer::AvatarLayer;
+mod chat;
 mod clipboard;
 mod commands;
 mod drop_hover;
@@ -184,6 +185,8 @@ pub(crate) struct HerdrWindow {
     pub(crate) space_query: String,
     /// The search field while it is open, and its edits.
     pub(crate) space_search: Option<(Entity<crate::search_input::SearchInput>, Subscription)>,
+    /// Agent panes shown as native chat.
+    pub(crate) chats: chat::Chats,
     /// The first space the last render listed under a search, for Enter.
     pub(crate) space_first_match: std::cell::RefCell<Option<(String, String)>>,
     /// Jev's judgment of how much each space needs you, 0 to 1, and the
@@ -505,6 +508,7 @@ impl HerdrWindow {
             jev: jev::Jev::from_environment(),
             space_query: String::new(),
             space_search: None,
+            chats: chat::Chats::default(),
             space_first_match: Default::default(),
             pinned: crate::spaces::Pins::all(cx),
             // A pin set in another window moves this one's rows too.

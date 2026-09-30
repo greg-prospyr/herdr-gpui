@@ -26,6 +26,7 @@ anyhow               = "1"
 aes                  = "0.9.3"
 cbc                  = { features = ["block-padding"], version = "0.2.1" }
 percent-encoding     = "2"
+pulldown-cmark       = { default-features = false, version = "0.13" }
 pbkdf2               = { default-features = false, features = ["hmac"], version = "0.13.0" }
 bincode              = { default-features = false, features = ["serde", "std"], version = "2" }
 chrono               = { default-features = false, features = ["clock"], version = "0.4" }

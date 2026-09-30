@@ -505,7 +505,7 @@ const SYMBOL_FAMILY_MARKER: &str = "nerd font";
 /// detection keeps only the best-ranked few families.
 const MAX_DETECTED_FALLBACKS: usize = 3;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FontConfig {
     pub family: String,
     pub size: f32,
@@ -1406,7 +1406,7 @@ impl Default for Theme {
 }
 
 /// `percent` of `over` blended onto `base`, per channel.
-fn mix(base: u32, over: u32, percent: u32) -> u32 {
+pub(crate) fn mix(base: u32, over: u32, percent: u32) -> u32 {
     let channel = |shift: u32| {
         let base = (base >> shift) & 255;
         let over = (over >> shift) & 255;

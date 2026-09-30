@@ -127,6 +127,13 @@ impl AssetSource for Icons {
             "icons/more.svg" => include_bytes!("../../../assets/icons/more.svg"),
             "icons/pin.svg" => include_bytes!("../../../assets/icons/pin.svg"),
             "icons/search.svg" => include_bytes!("../../../assets/icons/search.svg"),
+            "icons/tern-chart.svg" => include_bytes!("../../../assets/icons/tern-chart.svg"),
+            "icons/tern-delegate.svg" => include_bytes!("../../../assets/icons/tern-delegate.svg"),
+            "icons/tern-edit.svg" => include_bytes!("../../../assets/icons/tern-edit.svg"),
+            "icons/tern-file.svg" => include_bytes!("../../../assets/icons/tern-file.svg"),
+            "icons/tern-globe.svg" => include_bytes!("../../../assets/icons/tern-globe.svg"),
+            "icons/tern-search.svg" => include_bytes!("../../../assets/icons/tern-search.svg"),
+            "icons/tern-terminal.svg" => include_bytes!("../../../assets/icons/tern-terminal.svg"),
             _ => match crate::usage::icon(path) {
                 Some(bytes) => bytes,
                 None => return Ok(None),
@@ -172,6 +179,13 @@ impl AssetSource for Icons {
             "icons/more.svg",
             "icons/pin.svg",
             "icons/search.svg",
+            "icons/tern-chart.svg",
+            "icons/tern-delegate.svg",
+            "icons/tern-edit.svg",
+            "icons/tern-file.svg",
+            "icons/tern-globe.svg",
+            "icons/tern-search.svg",
+            "icons/tern-terminal.svg",
         ]
         .into_iter()
         .chain(crate::usage::icon_paths())
@@ -208,7 +222,7 @@ mod tests {
         assert!(Icons.load("unknown.svg").unwrap().is_none());
         assert_eq!(
             Icons.list("icons/").unwrap().len(),
-            35 + crate::usage::icon_paths().count()
+            42 + crate::usage::icon_paths().count()
         );
     }
 

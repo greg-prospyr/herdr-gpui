@@ -11,6 +11,7 @@ mod app_icon;
 mod avatar_picker;
 mod avatars;
 mod browser;
+mod chat;
 mod cli;
 mod close_modal;
 mod config;

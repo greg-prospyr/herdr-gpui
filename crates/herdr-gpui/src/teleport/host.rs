@@ -92,12 +92,22 @@ herdr_cli() {{ herdr{session} "$@"; }}
         limits: ScriptLimits,
         cancelled: &AtomicBool,
     ) -> Result<u64> {
+        let (host, script_text) = self.script(body);
+        run_script(host, &script_text, input, output, limits, cancelled).map_err(script(step))
+    }
+
+    /// Where `body` runs and its full text after the prelude, for callers
+    /// outside Teleport that run it themselves and report their own errors.
+    pub(crate) fn script(&self, body: &str) -> (ScriptHost<'_>, String) {
         let host = self
             .ssh
             .as_deref()
             .map_or(ScriptHost::Local, ScriptHost::Ssh);
-        let script_text = format!("{}{body}", self.prelude());
-        run_script(host, &script_text, input, output, limits, cancelled).map_err(script(step))
+        (host, format!("{}{body}", self.prelude()))
+    }
+
+    pub(crate) fn is_remote(&self) -> bool {
+        self.ssh.is_some()
     }
 
     /// Run `body` and collect its bounded stdout.

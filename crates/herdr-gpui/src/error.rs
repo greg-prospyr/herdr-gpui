@@ -375,6 +375,18 @@ pub enum Error {
     JevStatus(u16),
     #[error("Jev's answer was missing a score.")]
     JevAnswer,
+    #[error("Chat needs a local session or SSH host; custom socket endpoints are unsupported.")]
+    ChatHost,
+    #[error("Could not read the pane's agent session: {0}")]
+    ChatScript(#[source] herdr_client::Error),
+    #[error("Herdr described the pane in an unexpected way: {0}")]
+    ChatDecode(#[source] serde_json::Error),
+    #[error("Could not start the chat reader: {0}")]
+    ChatWorker(#[source] io::Error),
+    #[error("The {agent} session log was not found on its host.")]
+    ChatSessionMissing { agent: &'static str },
+    #[error("Message not sent: {0}")]
+    ChatSend(#[source] herdr_client::SendError),
     #[error("Herdr GPUI is not running, or its control socket {} is unreachable: {source}", path.display())]
     ControlUnavailable {
         path: PathBuf,

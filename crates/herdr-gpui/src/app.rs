@@ -221,6 +221,7 @@ pub(crate) fn run() -> std::process::ExitCode {
             space_avatars.install(cx);
             space_recency.install(cx);
             space_pins.install(cx);
+            crate::chat::install_fonts(cx);
             agent_skill.install_global(cx);
             // Only the user's own app answers agents; native test modes stay private.
             if mode == LaunchMode::Normal {

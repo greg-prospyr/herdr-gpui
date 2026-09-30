@@ -634,7 +634,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     /// A coherent surface for `snapshot`, as the daemon projects one.
-    pub(super) fn surface(snapshot: &ClientShellSnapshot, pane: &str) -> Arc<PaneSurfaceFrame> {
+    pub(crate) fn surface(snapshot: &ClientShellSnapshot, pane: &str) -> Arc<PaneSurfaceFrame> {
         let rect = SurfaceRect {
             x: 0,
             y: 0,

@@ -646,6 +646,52 @@ bridge files, they are not owned or deleted by Herdr on disconnect. Network loss
 can prevent cleanup, and kernel-blocked local filesystem operations cannot be
 forcibly interrupted. A copy stalls out after 30 seconds without progress.
 
+## Native Chat
+
+An agent pane running Claude Code or Codex shows a small `NATIVE` button in its
+top-right corner. Click it to draw the pane as a chat instead of a terminal:
+your messages on the right, the agent's replies as formatted Markdown, and what
+it did in between. Click the chat's `NATIVE` tag, or press Escape in its message
+box, to see the terminal again. The agent keeps running in its terminal
+the whole time; the chat is another way of looking at it, and closing it
+changes nothing in the session.
+
+The chat reads the session log the agent itself writes, found through the
+session id Herdr reports for the pane: `~/.claude/projects/*/<id>.jsonl` for
+Claude Code (or under `CLAUDE_CONFIG_DIR`) and
+`~/.codex/sessions/**/rollout-*-<id>.jsonl` for Codex (or under `CODEX_HOME`).
+On an SSH endpoint the log is read on that host over the same kind of
+noninteractive SSH connection Teleport uses; custom socket endpoints are not
+supported. When the agent starts a new session, for example after `/clear`,
+the chat follows the new one. Up to 3 MiB of an existing log is read when a
+chat opens, and the newest 600 items are kept.
+
+- Replies render headings, lists and task lists, quotes, tables, links, inline
+  code, and code blocks with syntax colours and a Copy button.
+- ` ```mermaid ` flowcharts and sequence diagrams are laid out and drawn
+  natively, with the source a Copy away. Other diagram kinds show as code.
+- `$$…$$` and ` ```math ` blocks are typeset; inline `$…$` math flows with the
+  text using Unicode symbols.
+- File edits show as diffs with added and removed counts. Commands are single
+  lines that open to show their output. Reads, searches, and web lookups are
+  one-line records, and a Claude Code to-do list shows as a checklist.
+- While Herdr reports the agent working, a `Working` clock counts the turn.
+
+The chat is drawn in the style of Tern's native panes (stencil.so/tern): the
+same dark tile, `NATIVE` tag, figure and tool cards, diff rows, and motion.
+New messages rise into place and arrive in teal before settling, diagrams pop
+in and draw their edges, finished tools pop their `Done`, and the working
+line's dots bounce under a shimmer. It is set in Geist and Geist Mono, which
+are bundled under the SIL Open Font License (`assets/fonts/geist/OFL.txt`).
+Click the `NATIVE` tag to see the terminal again.
+
+Text typed in the message box is sent to the pane as typed text followed by
+Return, exactly as if typed into the terminal. Links in replies open in the
+browser only when clicked, and only `http` and `https` links. Nothing in a
+log is executed or fetched, and control characters are removed before
+anything is drawn. At most eight panes show as chat at once, and panes
+narrower than 30 columns keep their terminal.
+
 ## Teleport
 
 Right-click a linked worktree and choose Teleport... to move it to another
