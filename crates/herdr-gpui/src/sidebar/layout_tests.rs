@@ -1566,6 +1566,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         space_query: String::new(),
         space_search: None,
         chats: Default::default(),
+        boxd: Default::default(),
         space_first_match: Default::default(),
         pinned: Vec::new(),
         _space_pin_changes: cx.observe_global::<crate::spaces::Pins>(|this, cx| {

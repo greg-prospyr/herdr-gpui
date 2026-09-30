@@ -236,6 +236,26 @@ downloads or runs an installer. After installing, choose Terminal > Reconnect.
 disconnecting, or changing daemon detection. Closing the GUI leaves the daemon
 and its terminals running.
 
+## boxd Machines
+
+A saved device whose SSH target is a [boxd](https://boxd.sh) machine
+(`name.boxd` or `name.boxd.sh`) is treated as one. boxd hibernates a machine
+after hours without network traffic and wakes it on the next connection, so the
+client avoids both keeping boxes awake and waking them:
+
+- A box that is not the device shown, with nothing working or blocked on it for
+  10 minutes, is disconnected and marked **asleep**. Its spaces stay listed with
+  their last state and a `boxd · asleep` chip.
+- Once a minute, while any enabled device is a box, the client runs
+  `boxd ls --json` on this Mac (from `~/.local/bin`, `~/.boxd/bin`, Homebrew,
+  or `PATH`). It never contacts the boxes to do this. A box boxd reports as
+  hibernated or suspended is not retried until boxd reports it running again.
+  Without the `boxd` CLI, boxes behave like any other SSH device.
+- Selecting an asleep box reconnects it at once, which also wakes the machine.
+- A box's rows carry a `boxd` chip, since the device label already names its
+  task. A space on any remote device that is still named `~` (a shell in the
+  login folder) shows the device's label instead.
+
 ## Configuration
 
 GUI settings live in `$XDG_CONFIG_HOME/herdr/`, falling back to

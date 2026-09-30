@@ -34,6 +34,20 @@ const STABLE_CONNECTION_PERIOD: Duration = Duration::from_secs(60);
 /// Upstream rechecks failed SSH machines every 30 seconds, so authentication
 /// repaired outside the app (a new master, a loaded key) is picked up promptly.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+/// How long a boxd device stays connected with nothing working or blocked on
+/// it while another device is shown. Its health checks are network traffic,
+/// so letting go is what lets boxd hibernate the box.
+const SLEEP_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// Why a saved boxd device is not being connected to right now. Selecting it
+/// wakes it either way: boxd resumes a machine on its next connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Sleep {
+    /// Quiet for a while and not shown: let go so the box can hibernate.
+    Idle,
+    /// boxd says the box is hibernated or suspended; connecting would wake it.
+    Hibernated,
+}
 
 /// How much of the window an update changes. Ordered, so several updates
 /// combine into the widest.
@@ -140,6 +154,11 @@ pub(super) struct Endpoint {
     detached: bool,
     initial_surface: bool,
     sounds: crate::sound::Policy,
+    /// Set while a boxd device is left disconnected on purpose; its last
+    /// snapshot stays in `live` so its spaces keep their place in the list.
+    pub(crate) sleep: Option<Sleep>,
+    /// Since when nothing on this device has been working or blocked.
+    quiet_since: Option<Instant>,
 }
 
 impl Endpoint {
@@ -178,6 +197,46 @@ impl Endpoint {
             detached: false,
             initial_surface: false,
             sounds: Default::default(),
+            sleep: None,
+            quiet_since: None,
+        }
+    }
+
+    /// The boxd machine this device is, if it is one.
+    pub(crate) fn box_name(&self) -> Option<&str> {
+        self.saved_ssh()
+            .and_then(|(target, _)| crate::boxd::box_name(target))
+    }
+
+    /// Lets go of the connection while keeping what it last showed.
+    fn sleep(&mut self, why: Sleep) {
+        let kept = self.live.snapshot.clone();
+        self.stop();
+        self.live.snapshot = kept;
+        self.sleep = Some(why);
+        self.quiet_since = None;
+    }
+
+    /// Whether the device was asleep; it is awake now and connects on the
+    /// next poll unless the caller connects it at once.
+    fn wake(&mut self) -> bool {
+        self.retry_at = Instant::now();
+        self.attempts = 0;
+        self.sleep.take().is_some()
+    }
+
+    /// The machine chip on this device's rows: boxes read as `boxd`, since
+    /// their label names the task and already titles the row, and a device
+    /// asleep says so.
+    pub(crate) fn chip(&self) -> String {
+        let name = if self.box_name().is_some() {
+            "boxd"
+        } else {
+            self.label.as_str()
+        };
+        match self.sleep {
+            Some(_) => format!("{name} · asleep"),
+            None => name.to_owned(),
         }
     }
 
@@ -212,6 +271,7 @@ impl Endpoint {
         self.stop();
         self.connection = ConnectionBridge::new(target);
         self.detached = false;
+        self.sleep = None;
         self.attempts = 0;
         // The replacement transport has produced no state of its own yet.
         self.live = LiveState::default();
@@ -271,6 +331,20 @@ impl Endpoint {
         } else {
             self.online_since = None;
         }
+        let busy = self.live.snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.workspaces.iter().any(|space| {
+                matches!(
+                    space.agent_status,
+                    herdr_client::protocol::AgentStatus::Working
+                        | herdr_client::protocol::AgentStatus::Blocked
+                )
+            })
+        });
+        if busy || !self.live.status.is_connected() {
+            self.quiet_since = None;
+        } else {
+            self.quiet_since.get_or_insert(now);
+        }
         changed
     }
 
@@ -281,6 +355,8 @@ impl Endpoint {
     pub fn status(&self) -> &'static str {
         if !self.enabled {
             "disabled"
+        } else if self.sleep.is_some() {
+            "asleep"
         } else if self.detached {
             "detached"
         } else if self.live.status.is_connected() {
@@ -633,6 +709,11 @@ impl HerdrWindow {
         let Some(index) = self.endpoints.iter().position(|e| e.id == id && e.enabled) else {
             return false;
         };
+        // A sleeping box is shown by waking it: the connection resumes the
+        // machine, and the stale snapshot must not stand in for a live one.
+        if self.endpoints[index].wake() {
+            self.endpoints[index].connect(self.options, false);
+        }
         if index == self.selected_endpoint {
             return true;
         }
@@ -768,6 +849,13 @@ impl HerdrWindow {
             }
         }
         let mut changed = Redraw::None;
+        let boxes = self
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.enabled && endpoint.box_name().is_some());
+        if self.boxd.poll(boxes, Instant::now()) | self.rest_boxes(Instant::now()) {
+            changed = Redraw::Window;
+        }
         // Whether the selected endpoint itself moved on. Only then does the
         // window take its state: another endpoint changing, or this one's
         // inbox being busy for a poll, must not replace what the window has
@@ -795,6 +883,7 @@ impl HerdrWindow {
             }
             if endpoint.enabled
                 && !endpoint.detached
+                && endpoint.sleep.is_none()
                 && endpoint.connection.handle.is_none()
                 && Instant::now() >= endpoint.retry_at
             {
@@ -897,6 +986,43 @@ impl HerdrWindow {
             Redraw::Terminal => self.redraw_terminal(cx),
             Redraw::Window => cx.notify(),
         }
+    }
+
+    /// Lets quiet boxd devices sleep and wakes those boxd reports running
+    /// again. The shown device never sleeps. Returns whether any changed.
+    fn rest_boxes(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        for (index, endpoint) in self.endpoints.iter_mut().enumerate() {
+            let Some(name) = endpoint.box_name() else {
+                continue;
+            };
+            if !endpoint.enabled || index == self.selected_endpoint {
+                continue;
+            }
+            let state = self.boxd.state(name);
+            match endpoint.sleep {
+                None if state == Some(crate::boxd::BoxState::Asleep)
+                    && !endpoint.live.status.is_connected() =>
+                {
+                    endpoint.sleep(Sleep::Hibernated);
+                    changed = true;
+                }
+                None if endpoint
+                    .quiet_since
+                    .is_some_and(|since| now.duration_since(since) >= SLEEP_AFTER) =>
+                {
+                    endpoint.sleep(Sleep::Idle);
+                    changed = true;
+                }
+                // Something else woke it; its agents may be at work again.
+                Some(Sleep::Hibernated) if state == Some(crate::boxd::BoxState::Running) => {
+                    endpoint.wake();
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        changed
     }
 
     /// Scan local sessions while the popup asks for them, and ask the saved
@@ -1441,6 +1567,99 @@ mod tests {
                 &view.endpoints[1].connection.target,
                 ConnectTarget::Ssh { session, .. } if session == "other"
             ));
+        });
+    }
+
+    fn boxd_host(id: &str) -> SavedHost {
+        SavedHost {
+            id: id.into(),
+            label: "Chart export v2".into(),
+            target: "prospyr-chart-export-v2-0929.boxd".into(),
+            session: "default".into(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn a_sleeping_box_keeps_its_rows_and_says_so() {
+        let mut endpoint = Endpoint::new(
+            "ssh:a".into(),
+            "Chart export v2".into(),
+            ConnectTarget::Ssh {
+                target: "prospyr-chart-export-v2-0929.boxd".into(),
+                session: "default".into(),
+            },
+            true,
+        );
+        assert_eq!(endpoint.box_name(), Some("prospyr-chart-export-v2-0929"));
+        assert_eq!(endpoint.chip(), "boxd");
+        endpoint.live.snapshot = Some(Arc::new(crate::sidebar::layout_tests::snapshot(2)));
+        endpoint.sleep(Sleep::Idle);
+        assert!(endpoint.live.snapshot.is_some(), "its spaces stay listed");
+        assert!(!endpoint.live.status.is_connected());
+        assert_eq!(endpoint.status(), "asleep");
+        assert_eq!(endpoint.chip(), "boxd · asleep");
+        assert!(endpoint.wake());
+        assert!(!endpoint.wake(), "waking twice is a no-op");
+        assert_eq!(endpoint.status(), "connecting");
+        let omarchy = Endpoint::new(
+            "ssh:o".into(),
+            "Omarchy".into(),
+            ConnectTarget::Ssh {
+                target: "greg@omarchy.tail862fd0.ts.net".into(),
+                session: "default".into(),
+            },
+            true,
+        );
+        assert_eq!(omarchy.box_name(), None);
+        assert_eq!(omarchy.chip(), "Omarchy");
+    }
+
+    /// Quiet boxes that are not shown let go; boxes boxd reports hibernated
+    /// are left alone until they run again; the shown device never sleeps.
+    #[gpui::test]
+    fn quiet_and_hibernated_boxes_sleep_and_running_ones_wake(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(crate::sidebar::layout_tests::fixture_window);
+        view.update(cx, |view, cx| {
+            view.reconcile_catalog(vec![boxd_host("a"), host("b", true)], cx);
+            let now = Instant::now();
+            let index = |view: &HerdrWindow, id: &str| {
+                view.endpoints
+                    .iter()
+                    .position(|endpoint| endpoint.id == id)
+                    .unwrap()
+            };
+            let a = index(view, "ssh:a");
+            let b = index(view, "ssh:b");
+            let long_ago = now.checked_sub(SLEEP_AFTER * 2).unwrap_or(now);
+            view.endpoints[a].quiet_since = Some(long_ago);
+            view.endpoints[b].quiet_since = Some(long_ago);
+            assert!(view.rest_boxes(now));
+            assert_eq!(view.endpoints[a].sleep, Some(Sleep::Idle));
+            assert_eq!(view.endpoints[b].sleep, None, "only boxes sleep");
+
+            // A hibernated box is not retried, and wakes when boxd runs it.
+            view.endpoints[a].wake();
+            view.boxd.set_state(
+                "prospyr-chart-export-v2-0929",
+                crate::boxd::BoxState::Asleep,
+            );
+            view.endpoints[a].quiet_since = None;
+            assert!(view.rest_boxes(now));
+            assert_eq!(view.endpoints[a].sleep, Some(Sleep::Hibernated));
+            view.boxd.set_state(
+                "prospyr-chart-export-v2-0929",
+                crate::boxd::BoxState::Running,
+            );
+            assert!(view.rest_boxes(now));
+            assert_eq!(view.endpoints[a].sleep, None);
+
+            // The device in the window never sleeps.
+            view.selected_endpoint = a;
+            view.endpoints[a].quiet_since = Some(long_ago);
+            assert!(!view.rest_boxes(now));
+            assert_eq!(view.endpoints[a].sleep, None);
+            view.selected_endpoint = 0;
         });
     }
 

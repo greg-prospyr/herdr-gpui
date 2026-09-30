@@ -10,6 +10,7 @@ mod app_badge;
 mod app_icon;
 mod avatar_picker;
 mod avatars;
+mod boxd;
 mod browser;
 mod chat;
 mod cli;
