@@ -636,6 +636,82 @@ fn attention_order_ranks_every_machine_in_one_list_naming_each(cx: &mut gpui::Te
 }
 
 #[gpui::test]
+fn pinned_spaces_sit_above_the_ranked_list_and_drag_into_a_new_order(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::{
+        preferences::SpaceSort,
+        spaces::{Pins, SpaceKey},
+    };
+    use herdr_client::protocol::AgentStatus;
+    let (fixture, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            let mut view = fixture_window(window, cx);
+            view.space_sort = SpaceSort::Attention;
+            let mut snapshot = snapshot(3);
+            for space in &mut snapshot.workspaces {
+                space.agent_status = AgentStatus::Idle;
+            }
+            snapshot.workspaces[1].agent_status = AgentStatus::Blocked;
+            view.live.snapshot = Some(Arc::new(snapshot));
+            view
+        });
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        SidebarFixture(view)
+    });
+    let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+    let order = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| full_draw(window, cx).clear(cx));
+        view.read_with(cx, |view, _| view.space_avatars.slot_ids())
+    };
+    assert_eq!(order(cx), ["w1", "w0", "w2"]);
+    assert!(cx.debug_bounds("spaces-pinned").is_none());
+    // Pinned spaces go first, in pin order, whatever their status.
+    cx.update(|_, cx| {
+        Pins::toggle(cx, SpaceKey::new(crate::endpoint::LOCAL, "w2"));
+        Pins::toggle(cx, SpaceKey::new(crate::endpoint::LOCAL, "w0"));
+    });
+    assert_eq!(order(cx), ["w2", "w0", "w1"]);
+    // Debug bounds keep every place a selector was ever painted, so rows are
+    // found by their avatars, which record this frame's layout.
+    let slot = |cx: &mut gpui::VisualTestContext, id: &str| {
+        view.read_with(cx, |view, _| view.space_avatars.slot_bounds(id).unwrap())
+    };
+    let label = cx.debug_bounds("spaces-pinned").unwrap();
+    let divider = cx.debug_bounds("spaces-pinned-end").unwrap();
+    assert!(label.bottom() <= slot(cx, "w2").top());
+    assert!(slot(cx, "w0").bottom() <= divider.top());
+    // The unpinned space is still gliding to its new place, so only the
+    // order says where it rests.
+    assert_eq!(divider.size.height, px(1.));
+    // Settle the glides pinning started, so each row rests where it hits.
+    view.update(cx, |view, _| {
+        *view.space_slides.borrow_mut() = Default::default();
+    });
+    assert_eq!(order(cx), ["w2", "w0", "w1"]);
+    // Dragging the first pin onto the second puts it after.
+    let from = slot(cx, "w2").center();
+    let to = slot(cx, "w0").center();
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
+    for position in [from + point(px(0.), px(6.)), to, to] {
+        cx.simulate_mouse_move(position, gpui::MouseButton::Left, Modifiers::none());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    assert!(cx.update(|_, cx| cx.has_active_drag()));
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::none());
+    assert_eq!(order(cx), ["w0", "w2", "w1"]);
+    // The menu offers whichever the space needs.
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.live.status = crate::state::ConnectionStatus::Connected;
+            view.open_workspace_menu("w0", Default::default(), window, cx);
+            assert!(view.pins_contain(&SpaceKey::new(crate::endpoint::LOCAL, "w0")));
+            view.dismiss_menu(window, cx);
+        })
+    });
+}
+
+#[gpui::test]
 fn sidebar_allocates_text_width(cx: &mut gpui::TestAppContext) {
     let (fixture, cx) = cx.add_window_view(|window, cx| {
         crate::bind_keys(cx);
@@ -1372,6 +1448,11 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         space_heads: Default::default(),
         space_rows: Default::default(),
         spaces_hovered: false,
+        pinned: Vec::new(),
+        _space_pin_changes: cx.observe_global::<crate::spaces::Pins>(|this, cx| {
+            this.pinned = crate::spaces::Pins::all(cx);
+            cx.notify();
+        }),
         _space_avatar_choices: cx
             .observe_global::<crate::pixel_avatar::AvatarStore>(|_, cx| cx.notify()),
         _sidebar_invalidation: HerdrWindow::invalidate_sidebar(cx),

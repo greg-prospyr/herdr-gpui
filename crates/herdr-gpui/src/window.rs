@@ -179,6 +179,9 @@ pub(crate) struct HerdrWindow {
     pub(crate) space_rows:
         std::cell::RefCell<std::collections::HashMap<crate::spaces::SpaceKey, usize>>,
     pub(crate) spaces_hovered: bool,
+    /// The pinned spaces, mirrored for code that has no app context.
+    pub(crate) pinned: Vec<crate::spaces::SpaceKey>,
+    pub(crate) _space_pin_changes: Subscription,
     pub(crate) _space_avatar_choices: Subscription,
     pub(crate) _sidebar_invalidation: Subscription,
     /// Browser tabs this window shows, and its pages for them.
@@ -193,6 +196,10 @@ pub(crate) struct HerdrWindow {
 pub(crate) struct SurfaceSignal;
 
 impl HerdrWindow {
+    pub(crate) fn pins_contain(&self, key: &crate::spaces::SpaceKey) -> bool {
+        self.pinned.contains(key)
+    }
+
     /// Redraws for a surface-only update. Notifying this view instead would
     /// also invalidate the cached sidebar, rebuilding every row for a frame
     /// whose rows did not change.
@@ -483,6 +490,12 @@ impl HerdrWindow {
             space_heads: Default::default(),
             space_rows: Default::default(),
             spaces_hovered: false,
+            pinned: crate::spaces::Pins::all(cx),
+            // A pin set in another window moves this one's rows too.
+            _space_pin_changes: cx.observe_global::<crate::spaces::Pins>(|this, cx| {
+                this.pinned = crate::spaces::Pins::all(cx);
+                cx.notify();
+            }),
             // An avatar chosen in another window changes this one's rows too.
             _space_avatar_choices: cx
                 .observe_global::<crate::pixel_avatar::AvatarStore>(|_, cx| cx.notify()),

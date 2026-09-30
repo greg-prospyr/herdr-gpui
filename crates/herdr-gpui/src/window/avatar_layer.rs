@@ -148,6 +148,15 @@ impl AvatarLayer {
             .collect()
     }
 
+    /// Where `id`'s avatar laid out in the last frame, if it did.
+    pub(crate) fn slot_bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
+        self.slots
+            .borrow()
+            .iter()
+            .find(|slot| slot.key.id == id)
+            .map(|slot| slot.bounds)
+    }
+
     /// The keys of those slots, machine included.
     pub(crate) fn slot_keys(&self) -> Vec<SpaceKey> {
         self.slots

@@ -35,6 +35,19 @@ fn a_space_menu_changes_its_avatar_and_back(cx: &mut TestAppContext) {
         "manual order shows no avatars"
     );
     assert!(offers(cx, SpaceSort::Attention));
+    // The same menu pins the space, and then offers to unpin it.
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let actions = view.workspace_menu_actions();
+            assert!(actions.contains(&WorkspaceMenuAction::Pin));
+            view.activate_workspace_menu(WorkspaceMenuAction::Pin, window, cx);
+            assert!(view.menu.page.is_none(), "pinning closes the menu");
+            view.open_workspace_menu("w1", Default::default(), window, cx);
+            let actions = view.workspace_menu_actions();
+            assert!(actions.contains(&WorkspaceMenuAction::Unpin));
+            assert!(!actions.contains(&WorkspaceMenuAction::Pin));
+        })
+    });
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.activate_workspace_menu(WorkspaceMenuAction::Avatar, window, cx);

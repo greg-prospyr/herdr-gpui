@@ -306,8 +306,14 @@ impl HerdrWindow {
             }
             items.push((WorkspaceMenuAction::Teleport, "Teleport..."));
         }
-        // Avatars show only in attention order, so only then can one change.
+        // Pins and avatars show only in attention order, so only then can
+        // they change.
         if self.space_sort == crate::preferences::SpaceSort::Attention {
+            items.push(if self.pinned_target() {
+                (WorkspaceMenuAction::Unpin, "Unpin")
+            } else {
+                (WorkspaceMenuAction::Pin, "Pin to top")
+            });
             items.push((WorkspaceMenuAction::Avatar, "Change avatar"));
         }
         // Only a workspace that heads a group of checkouts can fold anything.
@@ -421,6 +427,20 @@ impl HerdrWindow {
         cx.notify();
     }
 
+    /// The space the open menu is for, on the endpoint it opened on.
+    pub(crate) fn menu_space_key(&self) -> Option<crate::spaces::SpaceKey> {
+        let target = self.menu.target.as_ref()?;
+        Some(crate::spaces::SpaceKey::new(
+            &self.endpoints[self.selected_endpoint].id,
+            &target.id,
+        ))
+    }
+
+    fn pinned_target(&self) -> bool {
+        self.menu_space_key()
+            .is_some_and(|key| self.pins_contain(&key))
+    }
+
     pub(super) fn workspace_menu_actions(&self) -> Vec<WorkspaceMenuAction> {
         let mut actions: Vec<_> = self
             .workspace_items()
@@ -452,6 +472,14 @@ impl HerdrWindow {
             WorkspaceMenuAction::Avatar => {
                 self.menu.page = Some(Page::Avatar);
                 cx.notify();
+            }
+            WorkspaceMenuAction::Pin | WorkspaceMenuAction::Unpin => {
+                if let Some(key) = self.menu_space_key() {
+                    crate::spaces::Pins::toggle(cx, key);
+                    // Other windows hear of it from the store; this one knows now.
+                    self.pinned = crate::spaces::Pins::all(cx);
+                }
+                self.dismiss_menu(window, cx);
             }
         }
     }

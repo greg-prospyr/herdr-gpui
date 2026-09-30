@@ -1084,6 +1084,11 @@ Windows setup) nothing is saved and the window says so.
   While the pointer is over the list the order holds, so no row moves out from
   under a click; leaving it lets the list settle, and moved rows glide to their
   new places.
+  Pin to top in a space's right-click menu keeps it in a pinned group above
+  the ranked list, in the order you arrange by dragging one pinned row onto
+  another: dragged down it lands after that row, dragged up before it. Unpin
+  in the same menu returns it to the ranking. Pins, like the rest of attention
+  order, are this app's own (`space-pins.json`, at most 64).
   In attention order each space shows a small pixel moon in place of the
   repository owner's icon, lit with dithered shading. Its phase is its daemon
   status: a thin crescent at rest, a terminator sweeping across the face while

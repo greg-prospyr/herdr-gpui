@@ -70,6 +70,9 @@ pub(crate) enum WorkspaceMenuAction {
     ClearTeleported,
     /// Choose the pixel avatar the space shows in attention order.
     Avatar,
+    /// Keep the space above the attention list, or stop.
+    Pin,
+    Unpin,
 }
 
 impl WorkspaceMenuAction {
@@ -88,6 +91,7 @@ impl WorkspaceMenuAction {
             Self::TeleportBack => "icons/teleport-back.svg",
             Self::ClearTeleported => "icons/x.svg",
             Self::Avatar => "icons/user.svg",
+            Self::Pin | Self::Unpin => "icons/pin.svg",
             Self::PullRequest => return None,
         })
     }

@@ -91,14 +91,16 @@ impl HerdrWindow {
         // In attention order every machine's spaces form one ranked list,
         // drawn once, where the first machine with a snapshot would be.
         let mut merged = attention.then(|| self.ranked_spaces(cx));
+        let pinned_rows = merged.as_ref().map_or(0, |merged| merged.pinned);
         if let Some(merged) = &merged {
             // Resting tops from the heights the last frame laid out, so a
             // reordered row glides from where it was.
             let rows = self.space_rows.borrow();
             let mut top = 0.;
             let tops: Vec<_> = merged
+                .rows
                 .iter()
-                .filter_map(|(endpoint_index, (index, _, _))| {
+                .filter_map(|((endpoint_index, (index, _, _)), _)| {
                     let endpoint = &self.endpoints[*endpoint_index];
                     let live = if *endpoint_index == self.selected_endpoint {
                         &self.live
@@ -247,12 +249,12 @@ impl HerdrWindow {
             } else {
                 &endpoint.collapsed_repos
             };
-            let items: Vec<(usize, crate::spaces::Entry)> = if attention {
-                merged.take().unwrap_or_default()
+            let items: Vec<((usize, crate::spaces::Entry), Option<SpaceKey>)> = if attention {
+                merged.take().map(|merged| merged.rows).unwrap_or_default()
             } else {
                 visible_workspace_entries(&snapshot.workspaces, collapsed_repos)
                     .into_iter()
-                    .map(|entry| (endpoint_index, entry))
+                    .map(|entry| ((endpoint_index, entry), None))
                     .collect()
             };
             let drag = self
@@ -270,7 +272,7 @@ impl HerdrWindow {
                     .collect();
                 drop_dragged = plan.dragged();
                 let mut heights = vec![0.; plan.len()];
-                for (position, (_, entry)) in items.iter().enumerate() {
+                for (position, ((_, entry), _)) in items.iter().enumerate() {
                     if let (Some(unit), Some(bounds)) = (
                         plan.unit_of(entry.0),
                         self.sidebar_scroll[0].bounds_for_item(base + position),
@@ -286,12 +288,22 @@ impl HerdrWindow {
             // A child closes the group when no child follows it.
             let closes: Vec<bool> = (0..items.len())
                 .map(|position| {
-                    items[position].1.1 && !items.get(position + 1).is_some_and(|next| next.1.1)
+                    items[position].0.1.1 && !items.get(position + 1).is_some_and(|next| next.0.1.1)
                 })
                 .collect();
-            for (position, (endpoint_index, (index, indented, group))) in
+            for (position, ((endpoint_index, (index, indented, group)), pin)) in
                 items.into_iter().enumerate()
             {
+                // The pinned group sits under its own label, set off from the
+                // ranked rest; both are rows of the list, so they count.
+                if attention && pinned_rows > 0 && position == 0 {
+                    spaces = spaces.child(pinned_label(font, theme, look));
+                    space_rows += 1;
+                }
+                if attention && pinned_rows > 0 && position == pinned_rows {
+                    spaces = spaces.child(pinned_divider(theme, look));
+                    space_rows += 1;
+                }
                 if multi && !attention && endpoint.collapsed {
                     break;
                 }
@@ -496,6 +508,19 @@ impl HerdrWindow {
                     },
                 )
                 .id(SharedString::from(format!("workspace-{endpoint_id}-{id}")))
+                // A pinned row drags to rearrange the pins, and takes a
+                // dragged pin where the pointer lets go.
+                .when_some(pin, |row, key| {
+                    let target = key.clone();
+                    let accent = theme.primary();
+                    row.on_drag(PinDrag(key), |_, _, _, cx| cx.new(|_| EmptyView))
+                        .drag_over::<PinDrag>(move |style, _, _, _| {
+                            style.bg(Hsla::from(rgb(accent)).opacity(0.12))
+                        })
+                        .on_drop(cx.listener(move |_, drag: &PinDrag, _, cx| {
+                            crate::spaces::Pins::move_to(cx, &drag.0, &target);
+                        }))
+                })
                 .when(multi, |row| {
                     row.debug_selector(|| format!("workspace-{endpoint_id}-{id}"))
                 })
@@ -846,6 +871,32 @@ impl HerdrWindow {
                 .size_full(),
             )
     }
+}
+
+/// A pinned space being dragged to a new place among the pins.
+struct PinDrag(SpaceKey);
+
+fn pinned_label(font: &FontConfig, theme: &Theme, look: SidebarLook) -> Div {
+    div()
+        .debug_selector(|| "spaces-pinned".into())
+        .flex_none()
+        .h(px(line_height(font) + 6.))
+        .px(px(look.content_x()))
+        .flex()
+        .items_end()
+        .text_size(px((font.size - 1.).max(9.)))
+        .text_color(rgb(theme.muted))
+        .child(label_text("pinned"))
+}
+
+fn pinned_divider(theme: &Theme, look: SidebarLook) -> Div {
+    div()
+        .debug_selector(|| "spaces-pinned-end".into())
+        .flex_none()
+        .mx(px(look.content_x()))
+        .my(px(6.))
+        .h(px(1.))
+        .bg(rgb(theme.active))
 }
 
 pub(super) fn header(

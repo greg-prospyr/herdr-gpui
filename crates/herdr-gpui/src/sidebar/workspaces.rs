@@ -123,10 +123,13 @@ impl HerdrWindow {
     /// with the index of the endpoint it is on. A space focused on the machine
     /// the window shows counts as touched now; another machine's focus counts
     /// from when this client saw it move there.
-    pub(super) fn ranked_spaces(&self, cx: &App) -> Vec<(usize, crate::spaces::Entry)> {
-        use crate::spaces::{Recency, SpaceKey, Unit, rank, row_key, units, urgency};
+    pub(super) fn ranked_spaces(&self, cx: &App) -> RankedSpaces {
+        use crate::spaces::{Pins, Recency, SpaceKey, Unit, rank, row_key, units, urgency};
         let mut ranked = Vec::new();
         let mut rows = Vec::new();
+        // Each unit's pin, if any member is pinned: its place among the pins
+        // and the key that holds it.
+        let mut pins = Vec::new();
         for (endpoint_index, endpoint) in self.endpoints.iter().enumerate() {
             if !self.device_visible(&endpoint.id) {
                 continue;
@@ -173,20 +176,60 @@ impl HerdrWindow {
                         .map(|entry| (endpoint_index, entry.clone()))
                         .collect::<Vec<_>>(),
                 );
+                pins.push(
+                    spaces()
+                        .filter_map(|space| {
+                            let key = SpaceKey::new(&endpoint.id, &space.workspace_id);
+                            Some((Pins::position(cx, &key)?, key))
+                        })
+                        .min_by_key(|(position, _)| *position),
+                );
             }
         }
+        // Pins come first, in the order the user arranged; they are not ranked
+        // and the hold does not touch them.
+        let mut pinned: Vec<usize> = (0..ranked.len()).filter(|&i| pins[i].is_some()).collect();
+        pinned.sort_by_key(|&i| pins[i].as_ref().map(|(position, _)| *position));
+        let loose: Vec<usize> = (0..ranked.len()).filter(|&i| pins[i].is_none()).collect();
+        let candidates: Vec<Unit> = loose.iter().map(|&i| ranked[i].clone()).collect();
         // A pointer over the list holds its order; leaving lets it settle.
         let held = self
             .spaces_hovered
             .then(|| self.space_heads.borrow().clone());
-        let order = rank(&ranked, held.as_deref());
+        let order: Vec<usize> = rank(&candidates, held.as_deref())
+            .into_iter()
+            .map(|index| loose[index])
+            .collect();
         *self.space_heads.borrow_mut() = order
             .iter()
             .map(|&index| ranked[index].head.clone())
             .collect();
-        order
-            .into_iter()
-            .flat_map(|index| std::mem::take(&mut rows[index]))
-            .collect()
+        let mut result = RankedSpaces::default();
+        for index in pinned {
+            let key = pins[index].take().map(|(_, key)| key);
+            for row in std::mem::take(&mut rows[index]) {
+                result.rows.push((row, key.clone()));
+            }
+        }
+        result.pinned = result.rows.len();
+        for index in order {
+            result.rows.extend(
+                std::mem::take(&mut rows[index])
+                    .into_iter()
+                    .map(|row| (row, None)),
+            );
+        }
+        result
     }
+}
+
+/// Every visible machine's space rows in attention order: the pinned rows
+/// first, each with the pin that holds its group, then the ranked rest.
+#[derive(Default)]
+pub(super) struct RankedSpaces {
+    pub rows: Vec<(
+        (usize, crate::spaces::Entry),
+        Option<crate::spaces::SpaceKey>,
+    )>,
+    pub pinned: usize,
 }

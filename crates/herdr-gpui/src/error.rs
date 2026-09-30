@@ -367,6 +367,8 @@ pub enum Error {
     InvalidSpaceAvatars,
     #[error("Invalid saved space recency")]
     InvalidSpaceRecency,
+    #[error("Invalid saved pinned spaces")]
+    InvalidSpacePins,
     #[error("Herdr GPUI is not running, or its control socket {} is unreachable: {source}", path.display())]
     ControlUnavailable {
         path: PathBuf,

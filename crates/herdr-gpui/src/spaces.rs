@@ -6,10 +6,12 @@
 //! from the daemon's snapshot.
 
 mod order;
+mod pins;
 mod recency;
 mod slides;
 
 pub(crate) use order::{Entry, Unit, rank, units, urgency};
+pub(crate) use pins::Pins;
 pub(crate) use recency::{Recency, now_millis};
 pub(crate) use slides::Slides;
 
