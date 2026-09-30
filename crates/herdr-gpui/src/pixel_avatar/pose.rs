@@ -1,71 +1,37 @@
-//! How an avatar stands at a moment in time, and when that next changes.
+//! How a moon stands at a moment in time, and when that next changes.
 //!
 //! Status comes from the daemon's snapshot; this only remembers when this
-//! client saw it change, to play a short smooth "moment": a hop when an agent
-//! finishes, a shake when it blocks, a nudge when it starts work. After that
-//! each status loops at a pixel-art cadence on a clock shared by every
-//! avatar, so the working ones step together and share their redraws.
+//! client saw it change, to play a short smooth "moment": a shake when a
+//! space blocks, a ripple of light when it finishes. After that each status
+//! holds a phase: a still crescent at rest, a sweeping terminator at work, a
+//! pulsing blood moon when it needs you, a full moon when done. Only work
+//! and blocking move, on a clock shared by every moon, so they share redraws.
 
-use super::style::seed;
+use super::moon::{self, Light};
 use herdr_client::protocol::AgentStatus;
-use std::{
-    f32::consts::PI,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-/// A finished agent's hop, then the squash as it lands.
-const HOP: Duration = Duration::from_millis(560);
-const LAND: Duration = Duration::from_millis(200);
 const SHAKE: Duration = Duration::from_millis(900);
-const NUDGE: Duration = Duration::from_millis(420);
-/// A working agent's reading glance steps at 8 frames a second.
-const WORK_STEP: u128 = 125;
-/// Blocked and done agents pulse their mark twice a second.
-const PULSE_STEP: u128 = 500;
-const BLINK: u128 = 150;
+const RIPPLE: Duration = Duration::from_millis(900);
+/// A blood moon brightens and dims twice a second.
+const PULSE: u128 = 500;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Eyes {
-    /// Looking left of centre when negative, right when positive, in pixels.
-    Open {
-        look: i8,
-    },
-    Closed,
-}
-
-/// A mark drawn beside the head.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Mark {
-    /// Waiting on you: an exclamation point.
-    Alert,
-    /// Finished: a twinkle, in one of two places.
-    Sparkle(u8),
-}
-
-/// Offsets are in sprite pixels and may be fractional: moments move smoothly,
-/// loops move whole pixels.
+/// Offsets are in moon pixels and may be fractional during a moment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Pose {
+    pub light: Light,
     pub dx: f32,
-    pub dy: f32,
-    /// Height over width about the feet: below 1 squashes, above 1 stretches.
-    pub stretch: f32,
-    pub eyes: Eyes,
-    pub mark: Option<Mark>,
-    /// An agent whose status is unknown is drawn faded.
-    pub faded: bool,
+    /// How far a finished moon's ripple has spread, 0 to 1, while it plays.
+    pub ripple: Option<f32>,
 }
 
 impl Pose {
-    /// Standing still, eyes open: how pickers show a style.
+    /// A moon three-quarters lit: how pickers show a style.
     pub(crate) fn still() -> Self {
         Self {
+            light: Light::Phase(moon::PHASES / 3),
             dx: 0.,
-            dy: 0.,
-            stretch: 1.,
-            eyes: Eyes::Open { look: 0 },
-            mark: None,
-            faded: false,
+            ripple: None,
         }
     }
 }
@@ -93,22 +59,20 @@ impl Wake {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Motion {
     status: AgentStatus,
-    /// When this client saw the status change; `None` for the status an
-    /// agent already had when first seen, which plays no moment.
+    /// When this client saw the status change; `None` for the status a space
+    /// already had when first seen, which plays no moment.
     changed: Option<Instant>,
-    seed: u32,
 }
 
 impl Motion {
-    pub(crate) fn new(key: &str, status: AgentStatus) -> Self {
+    pub(crate) fn new(status: AgentStatus) -> Self {
         Self {
             status,
             changed: None,
-            seed: seed(key),
         }
     }
 
-    /// Records the daemon's latest status for this agent.
+    /// Records the daemon's latest status for this space.
     pub(crate) fn observe(&mut self, status: AgentStatus, now: Instant) {
         if status != self.status {
             self.status = status;
@@ -116,71 +80,43 @@ impl Motion {
         }
     }
 
-    fn moment(&self, now: Instant) -> Option<f32> {
-        let length = match self.status {
-            AgentStatus::Done => HOP + LAND,
-            AgentStatus::Blocked => SHAKE,
-            AgentStatus::Working => NUDGE,
-            AgentStatus::Idle | AgentStatus::Unknown => return None,
-        };
-        let elapsed = now.saturating_duration_since(self.changed?);
-        (elapsed < length).then_some(elapsed.as_secs_f32())
+    /// How long ago this client saw the status change, if it did.
+    pub(crate) fn since_change(&self, now: Instant) -> Option<Duration> {
+        self.changed.map(|at| now.saturating_duration_since(at))
     }
 
-    fn blink_period(&self) -> u128 {
-        4_000 + u128::from(self.seed % 12) * 250
+    fn moment(&self, now: Instant) -> Option<f32> {
+        let length = match self.status {
+            AgentStatus::Blocked => SHAKE,
+            AgentStatus::Done => RIPPLE,
+            _ => return None,
+        };
+        let elapsed = self.since_change(now)?;
+        (elapsed < length).then_some(elapsed.as_secs_f32() / length.as_secs_f32())
     }
 
     /// The pose at `now`, with loops timed from the shared `clock` start.
     pub(crate) fn pose(&self, now: Instant, clock: Instant) -> Pose {
         let tick = now.saturating_duration_since(clock).as_millis();
-        let mut pose = Pose::still();
-        match self.status {
-            AgentStatus::Working => {
-                let step = tick / WORK_STEP % 4;
-                pose.eyes = Eyes::Open {
-                    look: [-1, 0, 1, 0][step as usize],
-                };
-                pose.dy = if step % 2 == 1 { -1. } else { 0. };
-            }
-            AgentStatus::Blocked => {
-                pose.mark = (tick / PULSE_STEP).is_multiple_of(2).then_some(Mark::Alert);
-            }
-            AgentStatus::Done => {
-                pose.mark = Some(Mark::Sparkle((tick / PULSE_STEP % 2) as u8));
-            }
-            AgentStatus::Idle => {
-                let period = self.blink_period();
-                if tick % period >= period - BLINK {
-                    pose.eyes = Eyes::Closed;
-                }
-            }
-            AgentStatus::Unknown => pose.faded = true,
-        }
-        let Some(t) = self.moment(now) else {
-            return pose;
+        let light = match self.status {
+            AgentStatus::Working => Light::Phase(moon::phase_at(tick).0),
+            AgentStatus::Blocked => Light::Blood {
+                bright: (tick / PULSE).is_multiple_of(2),
+            },
+            AgentStatus::Done => Light::Full,
+            AgentStatus::Idle | AgentStatus::Unknown => Light::Crescent,
         };
-        match self.status {
-            AgentStatus::Done => {
-                let hop = HOP.as_secs_f32();
-                if t < hop {
-                    pose.dy = -4. * (PI * t / hop).sin();
-                    pose.stretch = 1. + 0.12 * (PI * t / hop).sin();
-                } else {
-                    pose.dy = 0.;
-                    pose.stretch = 1. - 0.2 * (PI * (t - hop) / LAND.as_secs_f32()).sin();
+        let moment = self.moment(now);
+        Pose {
+            light,
+            dx: match (self.status, moment) {
+                (AgentStatus::Blocked, Some(k)) => {
+                    (k * std::f32::consts::TAU * 6.).sin() * 1.6 * (1. - k)
                 }
-            }
-            AgentStatus::Blocked => {
-                let k = t / SHAKE.as_secs_f32();
-                pose.dx = (k * 2. * PI * 6.).sin() * 1.4 * (1. - k);
-            }
-            AgentStatus::Working => {
-                pose.dy = -1.6 * (PI * t / NUDGE.as_secs_f32()).sin();
-            }
-            AgentStatus::Idle | AgentStatus::Unknown => {}
+                _ => 0.,
+            },
+            ripple: moment.filter(|_| self.status == AgentStatus::Done),
         }
-        pose
     }
 
     /// When `pose` next returns something different.
@@ -189,20 +125,11 @@ impl Motion {
             return Wake::Frame;
         }
         let tick = now.saturating_duration_since(clock).as_millis();
-        let until = |step: u128| step - tick % step;
         let millis = match self.status {
-            AgentStatus::Working => until(WORK_STEP),
-            AgentStatus::Blocked | AgentStatus::Done => until(PULSE_STEP),
-            AgentStatus::Idle => {
-                let period = self.blink_period();
-                let phase = tick % period;
-                if phase >= period - BLINK {
-                    period - phase
-                } else {
-                    period - BLINK - phase
-                }
-            }
-            AgentStatus::Unknown => return Wake::Never,
+            AgentStatus::Working => moon::phase_at(tick).1,
+            AgentStatus::Blocked => PULSE - tick % PULSE,
+            // A crescent and a full moon hold still: no redraws at all.
+            AgentStatus::Done | AgentStatus::Idle | AgentStatus::Unknown => return Wake::Never,
         };
         Wake::After(Duration::from_millis(millis.max(1) as u64))
     }
@@ -210,6 +137,8 @@ impl Motion {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
 
     fn at(clock: Instant, millis: u64) -> Instant {
@@ -217,101 +146,77 @@ mod tests {
     }
 
     #[test]
-    fn the_status_an_agent_starts_with_plays_no_moment() {
+    fn resting_and_finished_moons_hold_still() {
         let clock = Instant::now();
-        for status in [
-            AgentStatus::Done,
-            AgentStatus::Blocked,
-            AgentStatus::Working,
+        for (status, light) in [
+            (AgentStatus::Idle, Light::Crescent),
+            (AgentStatus::Unknown, Light::Crescent),
+            (AgentStatus::Done, Light::Full),
         ] {
-            let motion = Motion::new("p", status);
-            assert_ne!(motion.wake(clock, clock), Wake::Frame, "{status:?}");
+            let motion = Motion::new(status);
+            assert_eq!(motion.pose(at(clock, 1234), clock).light, light);
+            assert_eq!(
+                motion.wake(at(clock, 1234), clock),
+                Wake::Never,
+                "{status:?}"
+            );
         }
     }
 
     #[test]
-    fn finishing_hops_smoothly_then_lands_and_settles() {
+    fn working_sweeps_the_terminator_on_the_shared_clock() {
         let clock = Instant::now();
-        let mut motion = Motion::new("p", AgentStatus::Working);
-        motion.observe(AgentStatus::Done, clock);
-        assert_eq!(motion.wake(clock, clock), Wake::Frame);
-        let apex = motion.pose(at(clock, 280), clock);
-        assert!(apex.dy < -3.9, "{apex:?}");
-        let landing = motion.pose(at(clock, 660), clock);
-        assert_eq!(landing.dy, 0.);
-        assert!(landing.stretch < 0.85, "{landing:?}");
-        let settled = at(clock, 800);
-        assert!(matches!(motion.wake(settled, clock), Wake::After(_)));
-        let rest = motion.pose(settled, clock);
-        assert_eq!((rest.dy, rest.stretch), (0., 1.));
-        assert!(matches!(rest.mark, Some(Mark::Sparkle(_))));
+        let motion = Motion::new(AgentStatus::Working);
+        assert_eq!(motion.pose(clock, clock).light, Light::Phase(0));
+        assert_eq!(motion.pose(at(clock, 250), clock).light, Light::Phase(1));
+        assert_eq!(
+            motion.wake(at(clock, 250), clock),
+            Wake::After(Duration::from_millis(230))
+        );
     }
 
     #[test]
-    fn blocking_shakes_and_then_pulses_an_alert() {
+    fn blocking_shakes_then_the_blood_moon_pulses() {
         let clock = Instant::now();
-        let mut motion = Motion::new("p", AgentStatus::Working);
+        let mut motion = Motion::new(AgentStatus::Working);
         motion.observe(AgentStatus::Blocked, clock);
+        assert_eq!(motion.wake(clock, clock), Wake::Frame);
         let shaking = (1..9).map(|i| motion.pose(at(clock, i * 20), clock).dx.abs());
         assert!(shaking.fold(0f32, f32::max) > 0.8);
         let after = at(clock, 1_000);
         assert_eq!(motion.pose(after, clock).dx, 0.);
-        let marks: Vec<_> = [1_000, 1_500]
-            .map(|millis| motion.pose(at(clock, millis), clock).mark)
-            .into();
-        assert!(marks.contains(&Some(Mark::Alert)) && marks.contains(&None));
         assert_eq!(
-            motion.wake(at(clock, 1_100), clock),
-            Wake::After(Duration::from_millis(400))
+            motion.pose(after, clock).light,
+            Light::Blood { bright: true }
+        );
+        assert_eq!(
+            motion.pose(at(clock, 1_500), clock).light,
+            Light::Blood { bright: false }
+        );
+        assert_eq!(
+            motion.wake(after, clock),
+            Wake::After(Duration::from_millis(500))
         );
     }
 
     #[test]
-    fn working_steps_its_glance_on_the_shared_clock() {
+    fn finishing_ripples_once_and_the_first_status_plays_nothing() {
         let clock = Instant::now();
-        let a = Motion::new("a", AgentStatus::Working);
-        let b = Motion::new("b", AgentStatus::Working);
-        let looks: Vec<_> = (0..4)
-            .map(|step| a.pose(at(clock, step * 125 + 10), clock).eyes)
-            .collect();
-        assert_eq!(
-            looks,
-            [-1, 0, 1, 0].map(|look| Eyes::Open { look }).to_vec()
+        let mut motion = Motion::new(AgentStatus::Working);
+        motion.observe(AgentStatus::Done, clock);
+        let ripple = motion.pose(at(clock, 450), clock).ripple.unwrap();
+        assert!(ripple > 0.4 && ripple < 0.6, "{ripple}");
+        assert_eq!(motion.pose(at(clock, 950), clock).ripple, None);
+        assert!(
+            Motion::new(AgentStatus::Done)
+                .pose(clock, clock)
+                .ripple
+                .is_none()
         );
-        let now = at(clock, 1_010);
-        assert_eq!(a.pose(now, clock), b.pose(now, clock));
-        assert_eq!(a.wake(now, clock), Wake::After(Duration::from_millis(115)));
-        assert_eq!(a.pose(now, clock).dy.fract(), 0.);
-    }
-
-    #[test]
-    fn idle_avatars_blink_briefly_at_their_own_pace() {
-        let clock = Instant::now();
-        let motion = Motion::new("idle", AgentStatus::Idle);
-        let period = motion.blink_period() as u64;
-        assert_eq!(motion.pose(clock, clock).eyes, Eyes::Open { look: 0 });
         assert_eq!(
-            motion.wake(clock, clock),
-            Wake::After(Duration::from_millis(period - 150))
+            motion.since_change(at(clock, 60_000)),
+            Some(Duration::from_secs(60))
         );
-        let closed = at(clock, period - 100);
-        assert_eq!(motion.pose(closed, clock).eyes, Eyes::Closed);
-        assert_eq!(
-            motion.wake(closed, clock),
-            Wake::After(Duration::from_millis(100))
-        );
-        let periods: std::collections::HashSet<_> = (0..20)
-            .map(|i| Motion::new(&format!("p{i}"), AgentStatus::Idle).blink_period())
-            .collect();
-        assert!(periods.len() > 4);
-    }
-
-    #[test]
-    fn unknown_status_rests_faded_and_never_wakes() {
-        let clock = Instant::now();
-        let motion = Motion::new("p", AgentStatus::Unknown);
-        assert!(motion.pose(clock, clock).faded);
-        assert_eq!(motion.wake(clock, clock), Wake::Never);
     }
 
     #[test]
@@ -323,6 +228,5 @@ mod tests {
         assert_eq!(a.min(b), a);
         assert_eq!(Wake::Never.min(b), b);
         assert_eq!(b.min(Wake::Frame), Wake::Frame);
-        assert_eq!(Wake::Never.min(Wake::Never), Wake::Never);
     }
 }

@@ -12,7 +12,7 @@
 
 use super::{HerdrWindow, SurfaceSignal};
 use crate::{
-    pixel_avatar::{self, AvatarStyle, Motion, Wake},
+    pixel_avatar::{self, AvatarStyle, Images, Motion, Wake},
     spaces::{Recency, SpaceKey, now_millis},
 };
 use gpui::{prelude::*, *};
@@ -44,6 +44,8 @@ pub(crate) struct AvatarLayer {
     observed: HashMap<String, (String, u64)>,
     /// Each endpoint's focused space last observed; a change is a touch.
     focused: HashMap<String, String>,
+    /// Rendered moons, shared with the paint closure and the picker.
+    images: Rc<RefCell<Images>>,
     /// Loops run on this clock, so every working avatar steps at once.
     clock: Instant,
     signal: Entity<SurfaceSignal>,
@@ -58,10 +60,16 @@ impl AvatarLayer {
             motions: Rc::default(),
             observed: HashMap::new(),
             focused: HashMap::new(),
+            images: Rc::default(),
             clock: Instant::now(),
             signal: cx.new(|_| SurfaceSignal),
             timer: None,
         }
+    }
+
+    /// The rendered moons, for anything else that paints one.
+    pub(crate) fn images(&self) -> Rc<RefCell<Images>> {
+        self.images.clone()
     }
 
     pub(crate) fn slots(&self) -> Slots {
@@ -83,7 +91,7 @@ impl AvatarLayer {
             motions
                 .entry(key.clone())
                 .and_modify(|motion| motion.observe(status, now))
-                .or_insert_with(|| Motion::new(id, status));
+                .or_insert_with(|| Motion::new(status));
             seen.insert(key);
         }
         motions.retain(|key, _| key.endpoint != endpoint || seen.contains(key));
@@ -217,20 +225,30 @@ impl HerdrWindow {
         let slots = layer.slots.clone();
         let clock = layer.clock;
         let motions = layer.motions.clone();
+        let images = layer.images.clone();
         Some(
             canvas(
                 |_, _, _| (),
                 move |_, _, window, _| {
                     let motions = motions.borrow();
+                    let mut images = images.borrow_mut();
                     for slot in slots.borrow().iter() {
                         let Some(motion) = motions.get(&slot.key) else {
                             continue;
                         };
                         let pose = motion.pose(now, clock);
-                        window
-                            .with_content_mask(Some(ContentMask { bounds: slot.clip }), |window| {
-                                pixel_avatar::paint(window, slot.bounds, slot.style, &pose)
-                            });
+                        window.with_content_mask(
+                            Some(ContentMask { bounds: slot.clip }),
+                            |window| {
+                                pixel_avatar::paint(
+                                    window,
+                                    &mut images,
+                                    slot.bounds,
+                                    slot.style,
+                                    &pose,
+                                )
+                            },
+                        );
                     }
                 },
             )
@@ -324,9 +342,15 @@ mod tests {
         );
         assert_eq!(layer.wake(now), Wake::Never, "no slots, nothing to draw");
         layer.slots.borrow_mut().push(slot(key("local", "idle")));
-        assert!(matches!(layer.wake(now), Wake::After(delay) if delay > Duration::from_secs(3)));
+        assert_eq!(
+            layer.wake(now),
+            Wake::Never,
+            "a resting crescent holds still"
+        );
         layer.slots.borrow_mut().push(slot(key("local", "gone")));
-        assert_eq!(layer.wake(now), Wake::After(Duration::from_millis(125)));
+        assert!(
+            matches!(layer.wake(now), Wake::After(delay) if delay <= Duration::from_millis(240))
+        );
         // A status change plays a moment, which draws every frame.
         let later = now + Duration::from_secs(2);
         layer.observe(

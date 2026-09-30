@@ -1084,13 +1084,15 @@ Windows setup) nothing is saved and the window says so.
   While the pointer is over the list the order holds, so no row moves out from
   under a click; leaving it lets the list settle, and moved rows glide to their
   new places.
-  In attention order each space shows an animated pixel avatar in place of the
-  repository owner's icon. It hops when the space finishes, shakes when it
-  blocks, and nudges when work starts, smoothly for under a second; after that
-  a working space glances about at 8 frames a second, blocked and done spaces
-  pulse a mark twice a second, idle ones blink every few seconds, and nothing
-  redraws while every avatar is still. Change avatar in a space's right-click
-  menu picks one of six shapes and ten colors, or returns to its default; the
+  In attention order each space shows a small pixel moon in place of the
+  repository owner's icon, lit with dithered shading. Its phase is its daemon
+  status: a thin crescent at rest, a terminator sweeping across the face while
+  it works, a pulsing blood moon when it needs you, and a full moon with a halo
+  when it is done. It shakes when a space blocks and sends out a ring of light
+  when one finishes. Resting and full moons never redraw; working and blocked
+  ones step a few times a second, and each pose is rendered once into an image
+  the window reuses. Change avatar in a space's right-click menu picks one of
+  six crater patterns and ten tints, or returns to its default; the
   choice is stored by this app only (`space-avatars.json`, at most 512
   spaces), since the daemon has nowhere to keep it. Rename in the same menu
   renames the space through the daemon, for every client. The window paints

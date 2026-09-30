@@ -4,21 +4,25 @@
 
 use crate::{
     HerdrWindow,
-    pixel_avatar::{self, AvatarStore, AvatarStyle, Hue, Shape},
+    pixel_avatar::{self, AvatarStore, AvatarStyle, Hue, Images, Shape},
     spaces::SpaceKey,
 };
 use gpui::{prelude::*, *};
+use std::{cell::RefCell, rc::Rc};
 
 const TILE: f32 = 36.;
 const TILE_SPRITE: f32 = 32.;
 const SWATCH: f32 = 20.;
 const PREVIEW: f32 = 64.;
 
-/// A sprite painted standing still, `side` pixels square.
-fn still(style: AvatarStyle, side: f32) -> impl IntoElement {
+/// A moon painted still, `side` pixels square.
+fn still(images: &Rc<RefCell<Images>>, style: AvatarStyle, side: f32) -> impl IntoElement {
+    let images = images.clone();
     canvas(
         |_, _, _| (),
-        move |bounds, _, window, _| pixel_avatar::paint_still(window, bounds, style),
+        move |bounds, _, window, _| {
+            pixel_avatar::paint_still(window, &mut images.borrow_mut(), bounds, style)
+        },
     )
     .size(px(side))
     .flex_none()
@@ -54,6 +58,7 @@ impl HerdrWindow {
             .try_global::<AvatarStore>()
             .and_then(|store| store.chosen(key))
             .is_some();
+        let images = self.space_avatars.images();
         let label = |text: &'static str| div().text_color(rgb(theme.muted)).child(text);
         let tile = |id: ElementId, selected: bool| {
             div()
@@ -73,7 +78,7 @@ impl HerdrWindow {
             tile(("avatar-shape", index).into(), shape == current.shape)
                 .debug_selector(move || format!("avatar-shape-{index}"))
                 .size(px(TILE))
-                .child(still(style, TILE_SPRITE))
+                .child(still(&images, style, TILE_SPRITE))
                 .on_click(cx.listener(move |this, _, _, cx| this.choose_avatar(Some(style), cx)))
         });
         let hues = Hue::ALL.into_iter().enumerate().map(|(index, hue)| {
@@ -96,7 +101,7 @@ impl HerdrWindow {
                     .flex()
                     .items_center()
                     .gap(px(12.))
-                    .child(still(current, PREVIEW))
+                    .child(still(&images, current, PREVIEW))
                     .child(
                         div()
                             .flex()
@@ -115,9 +120,9 @@ impl HerdrWindow {
                             ),
                     ),
             )
-            .child(label("Shape"))
+            .child(label("Craters"))
             .child(div().flex().flex_wrap().gap(px(4.)).children(shapes))
-            .child(label("Color"))
+            .child(label("Tint"))
             .child(div().flex().flex_wrap().gap(px(4.)).children(hues))
             .child(
                 div()

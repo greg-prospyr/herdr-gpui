@@ -83,7 +83,7 @@ impl Hue {
         }
     }
 
-    /// The body color; `tones` derives its shading from this.
+    /// The colour a moon's tint leans toward.
     pub(crate) fn base(self) -> u32 {
         match self {
             Self::Tangerine => 0xe8732c,
@@ -98,21 +98,6 @@ impl Hue {
             Self::Rose => 0xd9577a,
         }
     }
-
-    /// Body, lit edge, and shaded rim, as `0xRRGGBB`.
-    pub(crate) fn tones(self) -> [u32; 3] {
-        let base = self.base();
-        [base, mix(base, 0xffffff, 0.22), mix(base, 0x000000, 0.28)]
-    }
-}
-
-fn mix(from: u32, to: u32, amount: f32) -> u32 {
-    let channel = |shift: u32| {
-        let a = ((from >> shift) & 0xff) as f32;
-        let b = ((to >> shift) & 0xff) as f32;
-        ((a + (b - a) * amount).round() as u32).min(0xff) << shift
-    };
-    channel(16) | channel(8) | channel(0)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -140,13 +125,6 @@ impl AvatarStyle {
     }
 }
 
-/// A small per-key number that staggers idle blinks between avatars.
-pub(super) fn seed(key: &str) -> u32 {
-    key.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
-        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -167,16 +145,6 @@ mod tests {
         let hues: std::collections::HashSet<_> = styles.iter().map(|s| s.hue).collect();
         assert_eq!(shapes.len(), Shape::ALL.len());
         assert_eq!(hues.len(), Hue::ALL.len());
-    }
-
-    #[test]
-    fn tones_light_and_shade_the_base() {
-        for hue in Hue::ALL {
-            let [base, light, shade] = hue.tones();
-            let sum = |color: u32| (color >> 16) + ((color >> 8) & 0xff) + (color & 0xff);
-            assert!(sum(light) > sum(base) && sum(base) > sum(shade), "{hue:?}");
-        }
-        assert_eq!(mix(0x000000, 0xffffff, 0.5), 0x808080);
     }
 
     #[test]

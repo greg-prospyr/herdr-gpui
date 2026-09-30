@@ -1,95 +1,97 @@
-//! Painting a posed sprite as quads. A row of one tone is one quad, so an
-//! avatar costs a few dozen quads a frame, and corners snap to device pixels
-//! so the pixel art stays crisp between whole-pixel poses.
+//! Painting a posed moon. Each pose is rendered once per scale into an image
+//! the window's sprite atlas keeps, so a frame paints a few cached images
+//! rather than a quad per pixel. The cache is bounded, and images it drops
+//! are released from the atlas.
 
 use super::{
-    pose::{Eyes, Mark, Pose},
-    sprite::{Tone, sprite},
+    moon::{self, Light},
+    pose::Pose,
     style::AvatarStyle,
 };
-use gpui::{Bounds, Hsla, Pixels, Window, fill, point, px, rgb};
+use gpui::{Bounds, Corners, Hsla, Pixels, RenderImage, Window, point, px, quad, rgb, size};
+use image::Frame;
+use std::{collections::HashMap, sync::Arc};
 
-/// Sprites are this many pixels on a side.
+/// Rows size avatars in whole multiples of this many points.
 pub(crate) const GRID: usize = 16;
 
-const EYE: u32 = 0x1b1b1f;
-const ALERT: u32 = 0xf38ba8;
-const SPARKLE: u32 = 0xf9e2af;
+/// Enough for every pose of a few dozen visible spaces at one scale.
+const MAX_IMAGES: usize = 1024;
 
-/// Paints `style` standing still, as a picker shows it.
-pub(crate) fn paint_still(window: &mut Window, bounds: Bounds<Pixels>, style: AvatarStyle) {
-    paint(window, bounds, style, &Pose::still());
+const RIPPLE: u32 = 0xfff4d6;
+
+#[derive(Default)]
+pub(crate) struct Images {
+    images: HashMap<(AvatarStyle, Light, u32), Arc<RenderImage>>,
+}
+
+impl Images {
+    fn get(&mut self, window: &mut Window, style: AvatarStyle, light: Light) -> Arc<RenderImage> {
+        let scale = window.scale_factor().round().clamp(1., 4.) as u32;
+        if self.images.len() >= MAX_IMAGES && !self.images.contains_key(&(style, light, scale)) {
+            // Rare and cheap to rebuild: every pose re-renders on its next paint.
+            for (_, image) in self.images.drain() {
+                let _ = window.drop_image(image);
+            }
+        }
+        self.images
+            .entry((style, light, scale))
+            .or_insert_with(|| {
+                let mut pixels = moon::render(style, light, scale);
+                // GPUI's images are BGRA.
+                for pixel in pixels.pixels_mut() {
+                    pixel.0.swap(0, 2);
+                }
+                Arc::new(RenderImage::new(vec![Frame::new(pixels)]))
+            })
+            .clone()
+    }
 }
 
 /// Paints `style` in the square at the top of `bounds`, posed.
-pub(crate) fn paint(window: &mut Window, bounds: Bounds<Pixels>, style: AvatarStyle, pose: &Pose) {
-    let sprite = sprite(style.shape);
-    let [body, light, shade] = style.hue.tones();
-    let side = f32::from(bounds.size.width.min(bounds.size.height));
-    let cell = side / GRID as f32;
+pub(crate) fn paint(
+    window: &mut Window,
+    images: &mut Images,
+    bounds: Bounds<Pixels>,
+    style: AvatarStyle,
+    pose: &Pose,
+) {
+    let side = bounds.size.width.min(bounds.size.height);
+    let cell = side / moon::SIZE as f32;
     let scale = window.scale_factor();
-    let snap = |value: f32| (value * scale).round() / scale;
-    let alpha = if pose.faded { 0.45 } else { 1. };
-    let left = f32::from(bounds.origin.x) + pose.dx * cell;
-    let top = f32::from(bounds.origin.y) + pose.dy * cell;
-    // Squash and stretch about the feet and the vertical centre line, keeping
-    // the body's area roughly constant.
-    let (sx, sy) = (1. / pose.stretch.max(0.5), pose.stretch);
-    let centre = left + side / 2.;
-    let feet = top + side;
-    let mut rect = |x: f32, y: f32, width: f32, color: u32, posed: bool| {
-        let (x0, y0, w, h) = if posed {
-            (
-                centre + (x - GRID as f32 / 2.) * cell * sx,
-                feet - (GRID as f32 - y) * cell * sy,
-                width * cell * sx,
-                cell * sy,
-            )
-        } else {
-            (left + x * cell, top + y * cell, width * cell, cell)
-        };
-        let (x0, y0) = (snap(x0), snap(y0));
-        let (x1, y1) = (snap(x0 + w), snap(y0 + h));
-        if x1 > x0 && y1 > y0 {
-            window.paint_quad(fill(
-                Bounds::from_corners(point(px(x0), px(y0)), point(px(x1), px(y1))),
-                Hsla::from(rgb(color)).opacity(alpha),
-            ));
-        }
-    };
-    for y in 0..GRID {
-        for (start, length, tone) in sprite.runs(y) {
-            let color = match tone {
-                Tone::Body => body,
-                Tone::Light => light,
-                Tone::Shade => shade,
-            };
-            rect(start as f32, y as f32, length as f32, color, true);
-        }
+    let snap = |value: Pixels| px((f32::from(value) * scale).round() / scale);
+    let origin = point(
+        snap(bounds.origin.x + cell * pose.dx),
+        snap(bounds.origin.y),
+    );
+    let square = Bounds::new(origin, size(side, side));
+    let image = images.get(window, style, pose.light);
+    let _ = window.paint_image(square, square, Corners::default(), image, 0, false);
+    if let Some(k) = pose.ripple {
+        // A ring of light spreading from the limb as it fades.
+        let radius = cell * (12. + k * 11.);
+        let centre = square.center();
+        let ring = Bounds::new(
+            point(centre.x - radius, centre.y - radius),
+            size(radius * 2., radius * 2.),
+        );
+        window.paint_quad(quad(
+            ring,
+            radius,
+            Hsla::transparent_black(),
+            px(1.5),
+            Hsla::from(rgb(RIPPLE)).opacity(1. - k),
+            Default::default(),
+        ));
     }
-    for (x, y) in sprite.eyes {
-        let (x, y) = (f32::from(x), f32::from(y));
-        match pose.eyes {
-            Eyes::Open { look } => {
-                rect(x + f32::from(look), y, 1., EYE, true);
-                rect(x + f32::from(look), y + 1., 1., EYE, true);
-            }
-            Eyes::Closed => rect(x, y + 1., 1., EYE, true),
-        }
-    }
-    // Marks stay upright beside the head rather than squashing with it.
-    match pose.mark {
-        Some(Mark::Alert) => {
-            for y in [0., 1., 2., 4.] {
-                rect(14., y, 1., ALERT, false);
-            }
-        }
-        Some(Mark::Sparkle(phase)) => {
-            let (x, y) = if phase == 0 { (13., 2.) } else { (2., 3.) };
-            rect(x, y - 1., 1., SPARKLE, false);
-            rect(x - 1., y, 3., SPARKLE, false);
-            rect(x, y + 1., 1., SPARKLE, false);
-        }
-        None => {}
-    }
+}
+
+/// Paints `style` as a picker shows it: three-quarters lit and still.
+pub(crate) fn paint_still(
+    window: &mut Window,
+    images: &mut Images,
+    bounds: Bounds<Pixels>,
+    style: AvatarStyle,
+) {
+    paint(window, images, bounds, style, &Pose::still());
 }
