@@ -6,6 +6,11 @@ use std::sync::{Arc, LazyLock};
 
 pub(super) const WEBSITE: &str = "https://herdr.dev/";
 pub(super) const REPOSITORY: &str = "https://github.com/penso/herdr-gpui";
+
+/// The pull request a worktree build was made for.
+fn pull_request_url(pr: &str) -> String {
+    format!("{REPOSITORY}/pull/{pr}")
+}
 const COPYRIGHT_YEAR: &str = "© 2026";
 const AUTHOR: &str = "Fabien Penso";
 const AUTHOR_URL: &str = "https://pen.so";
@@ -155,7 +160,7 @@ impl HerdrWindow {
                     row.child(self.about_link(
                         "about-pr",
                         format!("PR #{pr}"),
-                        crate::worktree_banner::pull_request_url(pr),
+                        pull_request_url(pr),
                     ))
                 })
         })
