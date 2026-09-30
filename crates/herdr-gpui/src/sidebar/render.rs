@@ -13,7 +13,7 @@ use super::{
     reorder::{self, Plan},
     row::{RowIcon, RowLift, RowTree, removing_dot},
     sidebar_width, sorted_agents, visible_workspace_entries,
-    workspaces::{filter_entries, spaces_sort, workspace_badge, workspace_label},
+    workspaces::{filter_entries, space_label, spaces_sort, workspace_badge},
 };
 use crate::{
     Command, HerdrWindow, NavigationTarget,
@@ -234,13 +234,13 @@ impl HerdrWindow {
                 );
                 space_rows += 1;
             }
+            let chip = endpoint.chip();
             let row_cx = RowContext {
                 font,
                 theme,
                 look,
                 width,
-                host: (multi && endpoint_id != crate::endpoint::LOCAL)
-                    .then_some(endpoint.label.as_str()),
+                host: (multi && endpoint_id != crate::endpoint::LOCAL).then_some(chip.as_str()),
             };
             let live = if selected { &self.live } else { &endpoint.live };
             let Some(snapshot) = &live.snapshot else {
@@ -403,7 +403,12 @@ impl HerdrWindow {
                         cx.notify();
                     })),
                 });
-                let label = workspace_label(workspace, indented);
+                let label = space_label(
+                    workspace,
+                    indented,
+                    (endpoint_index != 0).then_some(endpoint.label.as_str()),
+                );
+                let chip = endpoint.chip();
                 let element = Cell::new(
                     rows,
                     RowData::Workspace(WorkspaceRow {
@@ -425,7 +430,7 @@ impl HerdrWindow {
                         },
                         fold,
                         grouped,
-                        host: (attention && multi).then_some(endpoint.label.as_str()),
+                        host: (attention && multi).then_some(chip.as_str()),
                         badge: workspace_badge(
                             workspace,
                             (endpoint_index == self.selected_endpoint)

@@ -375,6 +375,10 @@ pub enum Error {
     JevStatus(u16),
     #[error("Jev's answer was missing a score.")]
     JevAnswer,
+    #[error("Could not list boxd machines: {0}")]
+    BoxdList(#[source] herdr_client::Error),
+    #[error("boxd listed its machines in an unexpected way: {0}")]
+    BoxdDecode(#[source] serde_json::Error),
     #[error("Herdr GPUI is not running, or its control socket {} is unreachable: {source}", path.display())]
     ControlUnavailable {
         path: PathBuf,

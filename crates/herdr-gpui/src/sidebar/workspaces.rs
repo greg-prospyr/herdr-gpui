@@ -95,6 +95,21 @@ pub(crate) fn workspace_label(workspace: &ClientShellWorkspace, indented: bool) 
     first_text([branch, Some(&workspace.label)], "workspace")
 }
 
+/// A row's name. A remote space still named for the login folder (`~`)
+/// says nothing about itself, so it takes its device's label, which for a
+/// boxd box names the task it was made for.
+pub(crate) fn space_label<'a>(
+    workspace: &'a ClientShellWorkspace,
+    indented: bool,
+    device: Option<&'a str>,
+) -> &'a str {
+    let label = workspace_label(workspace, indented);
+    match device {
+        Some(device) if label == "~" && !workspace.custom_label => device,
+        _ => label,
+    }
+}
+
 /// The Spaces header's order, `manual` or `attention`, which a click flips.
 /// Client-local and saved beside the sidebar width, like the agents sort.
 pub(super) fn spaces_sort(window: &HerdrWindow, cx: &mut Context<HerdrWindow>) -> Stateful<Div> {
@@ -331,5 +346,41 @@ impl HerdrWindow {
         if let Some((endpoint, id)) = first {
             self.navigate_endpoint(&endpoint, crate::NavigationTarget::Workspace(&id), cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[test]
+    fn a_remote_home_space_takes_its_devices_name() {
+        let mut space = crate::sidebar::layout_tests::snapshot(1)
+            .workspaces
+            .remove(0);
+        space.label = "~".into();
+        space.custom_label = false;
+        assert_eq!(
+            space_label(&space, false, Some("Chart export v2")),
+            "Chart export v2"
+        );
+        assert_eq!(
+            space_label(&space, false, None),
+            "~",
+            "Local keeps its own name"
+        );
+        space.custom_label = true;
+        assert_eq!(
+            space_label(&space, false, Some("Chart export v2")),
+            "~",
+            "a name the user chose stands"
+        );
+        space.label = "prospyr-monorepo".into();
+        space.custom_label = false;
+        assert_eq!(
+            space_label(&space, false, Some("Chart export v2")),
+            "prospyr-monorepo"
+        );
     }
 }

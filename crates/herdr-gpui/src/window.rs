@@ -184,6 +184,8 @@ pub(crate) struct HerdrWindow {
     pub(crate) space_query: String,
     /// The search field while it is open, and its edits.
     pub(crate) space_search: Option<(Entity<crate::search_input::SearchInput>, Subscription)>,
+    /// Which saved devices' boxd machines are running, from the local CLI.
+    pub(crate) boxd: crate::boxd::Watcher,
     /// The first space the last render listed under a search, for Enter.
     pub(crate) space_first_match: std::cell::RefCell<Option<(String, String)>>,
     /// Jev's judgment of how much each space needs you, 0 to 1, and the
@@ -505,6 +507,7 @@ impl HerdrWindow {
             jev: jev::Jev::from_environment(),
             space_query: String::new(),
             space_search: None,
+            boxd: Default::default(),
             space_first_match: Default::default(),
             pinned: crate::spaces::Pins::all(cx),
             // A pin set in another window moves this one's rows too.
