@@ -409,6 +409,30 @@ impl HerdrWindow {
                     (endpoint_index != 0).then_some(endpoint.label.as_str()),
                 );
                 let chip = endpoint.chip();
+                // What the space has cooking: its tabs as pips, the busiest
+                // one's task for a detail, and its tab list when opened.
+                let tab_activity = super::tabs::tabs_of(snapshot, &workspace.workspace_id);
+                let space_key = SpaceKey::new(&endpoint.id, &workspace.workspace_id);
+                let list_key = format!("{endpoint_id}-{id}");
+                let tabs_shown = super::tabs::worth_showing(&tab_activity);
+                // A row being dragged carries no list; it would not move with it.
+                let tabs_open =
+                    tabs_shown && drag.is_none() && self.open_spaces.contains(&space_key);
+                let lead = super::tabs::lead(&tab_activity);
+                let pips = tabs_shown.then(|| {
+                    let key = space_key.clone();
+                    Box::new(super::tabs::TabPips {
+                        id: SharedString::from(format!("space-tabs-{list_key}")).into(),
+                        statuses: tab_activity.iter().map(|tab| tab.status).collect(),
+                        open: tabs_open,
+                        toggle: Box::new(cx.listener(move |this, _, _, cx| {
+                            if !this.open_spaces.remove(&key) {
+                                this.open_spaces.insert(key.clone());
+                            }
+                            cx.notify();
+                        })),
+                    })
+                });
                 let element = Cell::new(
                     rows,
                     RowData::Workspace(WorkspaceRow {
@@ -448,6 +472,8 @@ impl HerdrWindow {
                                     &workspace.workspace_id,
                                 )
                             }),
+                        tabs: pips,
+                        lead: lead.as_deref(),
                     }),
                     &row_cx,
                 )
@@ -571,10 +597,24 @@ impl HerdrWindow {
                     )
                 })
                 .when(shift != px(0.), |row| row.top(shift));
+                let tab_list = tabs_open.then(|| {
+                    let indent = row_cx.look.content_x() + STATUS_WIDTH + row_cx.look.density.gap();
+                    super::tabs::tab_list(&list_key, &tab_activity, indent, &row_cx, |tab| {
+                        let (endpoint, tab) = (endpoint_id.clone(), tab.to_owned());
+                        Box::new(cx.listener(move |this, _, window, cx| {
+                            this.navigate_endpoint(&endpoint, NavigationTarget::Tab(&tab), cx);
+                            window.focus(&this.focus, cx);
+                        }))
+                    })
+                });
                 spaces = if carried {
                     // Painted last so it floats over the rows it passes, while
                     // its layout slot keeps the others' positions stable.
                     spaces.child(deferred(element.cursor_grabbing()).with_priority(1))
+                } else if let Some(list) = tab_list {
+                    // The list rides with its row, one child of the list, so
+                    // rows keep their indices for scrolling to the selection.
+                    spaces.child(div().flex().flex_col().child(element).child(list))
                 } else {
                     spaces.child(element)
                 };

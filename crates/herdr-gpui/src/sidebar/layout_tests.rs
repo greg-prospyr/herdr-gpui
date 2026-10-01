@@ -1399,16 +1399,23 @@ fn multi_host_rows_scope_duplicate_ids_and_keep_agents_when_host_collapses(
             assert!(!cx.global::<TextProbes>().0.contains_key(word), "{word}");
         }
     });
-    for (icon, title) in [
-        ("github-herdr", "name-herdr"),
-        ("github-remote workspace", "name-remote workspace"),
+    for (icon, title, pips) in [
+        ("github-herdr", "name-herdr", "space-tabs-herdr"),
+        (
+            "github-remote workspace",
+            "name-remote workspace",
+            "space-tabs-remote workspace",
+        ),
     ] {
+        let pips = cx.debug_bounds(pips);
         let icon = cx.debug_bounds(icon).unwrap();
         let title = cx.debug_bounds(title).unwrap();
         assert_eq!(icon.size, size(px(12.), px(12.)));
         assert_eq!(title.left(), icon.right() + px(6.));
+        // A space's tab pips take the end of its label's room.
+        let end = pips.map_or(title.right(), |pips| pips.right());
         assert_eq!(
-            title.size.width,
+            end - title.left(),
             px(super::LABEL_WIDTH - super::ICON_RESERVE)
         );
     }
@@ -1567,6 +1574,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         space_search: None,
         chats: Default::default(),
         boxd: Default::default(),
+        open_spaces: Default::default(),
         space_first_match: Default::default(),
         pinned: Vec::new(),
         _space_pin_changes: cx.observe_global::<crate::spaces::Pins>(|this, cx| {
@@ -1709,25 +1717,34 @@ fn check_sidebar(fixture: Entity<SidebarFixture>, cx: &mut gpui::VisualTestConte
         assert_eq!(name.size.height, px(16.));
     }
 
-    for (row, column, name, detail) in [
-        ("row-herdr", "column-herdr", "name-herdr", "detail-herdr"),
+    for (row, column, name, detail, tabs) in [
+        (
+            "row-herdr",
+            "column-herdr",
+            "name-herdr",
+            "detail-herdr",
+            "space-tabs-herdr",
+        ),
         (
             "row-herdr-gpui-sidebar-rendering-regression-investigation",
             "column-herdr-gpui-sidebar-rendering-regression-investigation",
             "name-herdr-gpui-sidebar-rendering-regression-investigation",
             "detail-herdr-gpui-sidebar-rendering-regression-investigation",
+            "space-tabs-herdr-gpui-sidebar-rendering-regression-investigation",
         ),
         (
             "row-agent-p0",
             "column-agent-p0",
             "name-agent-p0",
             "detail-agent-p0",
+            "space-tabs-agent-p0",
         ),
         (
             "row-agent-p1",
             "column-agent-p1",
             "name-agent-p1",
             "detail-agent-p1",
+            "space-tabs-agent-p1",
         ),
     ] {
         let row_bounds = cx.debug_bounds(row).unwrap();
@@ -1737,9 +1754,16 @@ fn check_sidebar(fixture: Entity<SidebarFixture>, cx: &mut gpui::VisualTestConte
         eprintln!(
             "{row}: row={row_bounds:?}, column={column_bounds:?}, name={name_bounds:?}, detail={detail_bounds:?}"
         );
-        assert!(name_bounds.size.width > px(150.), "{name}: {name_bounds:?}");
+        // A space's tab pips take the end of the room both lines share.
+        let pips = cx
+            .debug_bounds(tabs)
+            .map_or(px(0.), |pips| pips.right() - name_bounds.right());
         assert!(
-            detail_bounds.size.width > px(150.),
+            name_bounds.size.width + pips > px(150.),
+            "{name}: {name_bounds:?}"
+        );
+        assert!(
+            detail_bounds.size.width + pips > px(150.),
             "{detail}: {detail_bounds:?}"
         );
         assert_eq!(name_bounds.size.height, px(16.), "single-line name");
@@ -1769,16 +1793,18 @@ fn check_sidebar(fixture: Entity<SidebarFixture>, cx: &mut gpui::VisualTestConte
         });
         assert_eq!(cx.debug_bounds("sidebar").unwrap().size.width, px(target));
         let label = cx.debug_bounds("name-herdr").unwrap();
+        // The name and its space's tab pips share the label's room.
+        let end = cx
+            .debug_bounds("space-tabs-herdr")
+            .map_or(label.right(), |pips| pips.right());
+        let room = end - label.left();
         assert_eq!(
-            label.size.width,
+            room,
             px(super::LABEL_WIDTH + target - 232. - super::ICON_RESERVE)
         );
         let parent = cx.debug_bounds("name-agent-launcher").unwrap();
         let child = cx.debug_bounds("name-sidebar-child").unwrap();
-        assert_eq!(
-            parent.size.width,
-            label.size.width - px(super::ARROW_RESERVE)
-        );
+        assert_eq!(parent.size.width, room - px(super::ARROW_RESERVE));
         assert_eq!(
             child.size.width,
             parent.size.width - px(super::CHILD_INDENT) + px(super::ICON_RESERVE)
@@ -2174,8 +2200,12 @@ fn check_sidebar(fixture: Entity<SidebarFixture>, cx: &mut gpui::VisualTestConte
     let icon = cx.debug_bounds("github-herdr").unwrap();
     assert_eq!(title.bottom(), detail.top());
     assert_eq!(detail.size.height, px(line_height));
+    // The name and its space's tab pips share the label's room.
+    let end = cx
+        .debug_bounds("space-tabs-herdr")
+        .map_or(title.right(), |pips| pips.right());
     assert_eq!(
-        title.size.width,
+        end - title.left(),
         px(super::LABEL_WIDTH - super::ICON_RESERVE)
     );
     assert_eq!(title.right(), detail.right());
@@ -4591,4 +4621,85 @@ fn every_layout_looks_different(cx: &mut gpui::TestAppContext) {
         }
         seen.push((mode, signature));
     }
+}
+
+/// A space with work in more than one tab shows pips; clicking them opens a
+/// line per tab under the row without selecting the row, and closes again.
+#[gpui::test]
+fn space_tabs_show_as_pips_that_open_a_tab_list(cx: &mut gpui::TestAppContext) {
+    use crate::spaces::SpaceKey;
+    use herdr_client::protocol::{AgentStatus, ClientShellTab};
+    let (fixture, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            let mut view = fixture_window(window, cx);
+            let mut snapshot = snapshot(3);
+            let tab = |id: &str, number, status| ClientShellTab {
+                tab_id: id.into(),
+                workspace_id: "w1".into(),
+                number,
+                label: format!("tab {number}"),
+                custom_label: false,
+                zoomed: false,
+                focused: false,
+                agent_status: status,
+            };
+            snapshot.tabs = vec![
+                tab("w1:t1", 1, AgentStatus::Working),
+                tab("w1:t2", 2, AgentStatus::Idle),
+            ];
+            let mut agent = snapshot.agents[0].clone();
+            agent.workspace_id = "w1".into();
+            agent.tab_id = "w1:t1".into();
+            agent.agent_status = AgentStatus::Working;
+            agent.tokens = vec![("quota_topic".into(), "Running tests".into())];
+            snapshot.agents = vec![agent];
+            view.live.snapshot = Some(Arc::new(snapshot));
+            view
+        });
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        SidebarFixture(view)
+    });
+    let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    // w1 has two tabs and an agent.
+    let pips = cx
+        .debug_bounds("space-tabs-herdr-gpui-sidebar-rendering-regression-investigation")
+        .unwrap();
+    assert!(cx.debug_bounds("space-tab-list-local-w1").is_none());
+    let focused_before = view.read_with(cx, |view, _| {
+        view.live
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .focused_workspace_id
+            .clone()
+    });
+    cx.simulate_click(pips.center(), Modifiers::none());
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    assert!(view.read_with(cx, |view, _| {
+        view.open_spaces
+            .contains(&SpaceKey::new(crate::endpoint::LOCAL, "w1"))
+    }));
+    let list = cx.debug_bounds("space-tab-list-local-w1").unwrap();
+    let first = cx.debug_bounds("space-tab-w1:t1").unwrap();
+    let second = cx.debug_bounds("space-tab-w1:t2").unwrap();
+    assert!(first.top() >= pips.bottom(), "the list sits under its row");
+    assert!(second.top() > first.top() && list.bottom() >= second.bottom());
+    assert_eq!(
+        view.read_with(cx, |view, _| view
+            .live
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .focused_workspace_id
+            .clone()),
+        focused_before,
+        "opening the list does not select the space"
+    );
+    let pips = cx
+        .debug_bounds("space-tabs-herdr-gpui-sidebar-rendering-regression-investigation")
+        .unwrap();
+    cx.simulate_click(pips.center(), Modifiers::none());
+    cx.update(|window, cx| full_draw(window, cx).clear(cx));
+    assert!(cx.debug_bounds("space-tab-list-local-w1").is_none());
 }

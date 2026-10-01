@@ -64,6 +64,11 @@ pub(super) struct WorkspaceRow<'a> {
     pub(super) badge: Option<RowBadge>,
     /// The checkout is being deleted.
     pub(super) removing: bool,
+    /// The space's tabs as activity pips, where it has more than a shell.
+    pub(super) tabs: Option<Box<super::tabs::TabPips>>,
+    /// The busiest tab's task, shown in place of the branch while an agent
+    /// works or waits there.
+    pub(super) lead: Option<&'a str>,
 }
 
 impl<'a> WorkspaceRow<'a> {
