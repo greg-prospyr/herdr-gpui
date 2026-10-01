@@ -10,6 +10,7 @@ mod metrics;
 mod render;
 mod reorder;
 mod row;
+mod tabs;
 mod view;
 mod workspaces;
 

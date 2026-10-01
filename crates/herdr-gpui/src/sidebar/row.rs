@@ -315,6 +315,8 @@ pub(super) fn row(
     status_text: Option<&'static str>,
     // The machine a row's space is on, as a small chip before its detail.
     host: Option<&str>,
+    // The space's tab pips and their width, on the name line's trailing edge.
+    pips: Option<(Stateful<Div>, f32)>,
     look: SidebarLook,
     appearance: (&FontConfig, &Theme),
 ) -> Div {
@@ -390,7 +392,10 @@ pub(super) fn row(
         0.
     };
     let status_color = status_style(status).2;
-    let label_width = (available - pr_reserve - status_reserve).max(0.);
+    let pips_reserve = pips.as_ref().map_or(0., |(_, width)| {
+        width.min((available - pr_reserve - status_reserve - gap).max(0.)) + gap
+    });
+    let label_width = (available - pr_reserve - status_reserve - pips_reserve).max(0.);
     let agent_icon = match kind {
         RowKind::Agent(icon) => Some(icon),
         RowKind::Workspace => None,
@@ -571,6 +576,13 @@ pub(super) fn row(
                     .overflow_hidden()
                     .text_color(rgb(status_color))
                     .child(div().w(px(status_width)).truncate().child(label_text(text))),
+            )
+        })
+        .when_some(pips, |row, (pips, _)| {
+            row.child(
+                pips.debug_selector(|| format!("space-tabs-{key}"))
+                    .w(px((pips_reserve - gap).max(0.)))
+                    .overflow_hidden(),
             )
         })
         // The collapse column comes first so the badge can hug the row's edge;

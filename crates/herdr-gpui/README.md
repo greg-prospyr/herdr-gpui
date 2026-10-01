@@ -1147,6 +1147,16 @@ Windows setup) nothing is saved and the window says so.
   renames the space through the daemon, for every client. The window paints
   avatars in a layer over the cached sidebar, so an avatar frame redraws the
   window the way terminal output does, without rebuilding the rows.
+- A space with more than one tab, or an agent in one, shows a pip per tab after
+  its name: tallest when the tab's agent needs you, then working, then done,
+  and a stub for an idle shell, in the status dot's colours. While an agent
+  works or waits on you there, the busiest tab's task (`agent · task`, from the
+  topic Herdr reports or the agent's terminal title) replaces the branch
+  under the name. Clicking the pips opens a line per tab under the row
+  (status, agent or tab name, task) without selecting the space; clicking a
+  line goes to that tab. Which spaces are open is this window's alone. Pips,
+  and so tab lists, are drawn by the default Herdr row layout; the Superset,
+  Orca, and Minimal layouts keep their rows as they were.
 - Resizable sidebar with width persisted per local daemon socket, shared across
   host groups. Drag the divider between Spaces and Agents up or down to resize
   their sections; double-click it to restore an even split. The split is saved

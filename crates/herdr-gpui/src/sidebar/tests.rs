@@ -354,6 +354,8 @@ fn cells_hand_their_state_and_data_to_the_layout() {
             host: None,
             badge: None,
             removing: false,
+            tabs: None,
+            lead: None,
         })
     };
     let _ = Cell::new(&recorder, workspace(), &cx).row();

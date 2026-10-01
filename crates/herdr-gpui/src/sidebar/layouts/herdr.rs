@@ -18,6 +18,7 @@ impl RowLayout for Herdr {
         let density = cx.look.density;
         let lines = if density.workspace_details() { 2. } else { 1. };
         let (branch, status) = (row.branch().unwrap_or(""), row.status());
+        let detail = row.lead.unwrap_or(branch);
         let WorkspaceRow {
             label,
             tree,
@@ -27,8 +28,13 @@ impl RowLayout for Herdr {
             badge,
             removing,
             host,
+            tabs,
             ..
         } = row;
+        let pips = tabs.map(|tabs| {
+            let width = tabs.width();
+            (tabs.element(cx), width)
+        });
         let arrow = fold.map(|fold| {
             fold.element(cx.theme)
                 .w(px(ARROW_RESERVE - density.gap()))
@@ -38,7 +44,7 @@ impl RowLayout for Herdr {
         super::super::row::row(
             label,
             &[(label, true)],
-            branch,
+            detail,
             RowKind::Workspace,
             status,
             removing,
@@ -51,6 +57,7 @@ impl RowLayout for Herdr {
             badge,
             None,
             host,
+            pips,
             cx.look,
             (cx.font, cx.theme),
         )
@@ -73,6 +80,7 @@ impl RowLayout for Herdr {
             None,
             None,
             agent.status_text,
+            None,
             None,
             cx.look,
             (cx.font, cx.theme),
